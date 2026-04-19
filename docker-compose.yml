@@ -1,0 +1,22 @@
+# 小智 server 单模块部署(黑客松)
+# Mac arm64: 通过 Rosetta 跑 x86 镜像
+services:
+  xiaozhi-server:
+    image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:server_latest
+    platform: linux/amd64   # arm64 Mac 用 Rosetta 仿真运行 x86 镜像
+    container_name: xiaozhi-server
+    restart: unless-stopped
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "8000:8000"   # WebSocket(设备/网页连入)
+      - "8003:8003"   # HTTP(OTA + vision)
+    volumes:
+      - ./data:/opt/xiaozhi-esp32-server/data
+      - ./models/SenseVoiceSmall/model.pt:/opt/xiaozhi-esp32-server/models/SenseVoiceSmall/model.pt
+    extra_hosts:
+      # arm64 Mac Docker Desktop 默认就有 host.docker.internal → host-gateway
+      # 这里显式声明,MCP dispatcher 跑在宿主机,容器内通过此域名访问
+      - "host.docker.internal:host-gateway"
