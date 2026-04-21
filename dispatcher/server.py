@@ -29,7 +29,7 @@ STATE_FILE = Path("/tmp/xiaozhi-dispatcher-state.json")
 RUNS_DIR = Path("/tmp/xiaozhi-dispatcher-runs")
 RUNS_DIR.mkdir(exist_ok=True)
 
-HERMES_TIMEOUT_SEC = 90          # 与 xiaozhi 的 tool_call_timeout 保持一致
+HERMES_TIMEOUT_SEC = 300         # 与 xiaozhi 的 tool_call_timeout 保持一致
 CLAUDE_FALLBACK_TIMEOUT_SEC = 120
 
 mcp = FastMCP("openclaw-dispatcher")

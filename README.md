@@ -1,8 +1,8 @@
-# CodePower AI — 语音版多 Agent 运营助手
+# CodePower AI — 语音版 Hermes 执行助手
 
-把一个多 agent 运营系统(OpenClaw Lite + Hermes)接到语音界面。一句话说"派 planner 做 XXX",小智就用 gpt 理解意图、调 MCP、派给 agent 执行,用 EdgeTTS 语音播报结果。
+把一个可语音驱动的 `Hermes` 执行链接到小智服务上。一句话说“让 Hermes 去做 XXX”，小智就会识别请求、先进入确认链，再通过 MCP 调起 Hermes 落地执行,最后用 EdgeTTS 语音播报结果。
 
-**硬件目标**:装在充电宝里的随身 coding 助手(ESP32 + 麦克风)。黑客松期间用浏览器模拟麦克风演示。
+**硬件目标**:装在充电宝里的随身执行助手(ESP32 + 麦克风)。黑客松期间用浏览器模拟麦克风演示。
 
 ```
 麦克风/浏览器
@@ -13,8 +13,7 @@ xiaozhi-esp32-server(8000 / 8003)
    ▼
 dispatcher(127.0.0.1:9000)       ← 本仓库核心代码
    │
-   ├── Hermes(主路,gpt-5.4 中转) ← 快,便宜
-   └── OpenClaw dispatch.sh(兜底,Claude -p) ← 复杂任务,贵
+   └── Hermes(主路,gpt-5.4 / OpenAI 兼容) ← 当前唯一暴露给模型的执行工具
 ```
 
 ---
@@ -24,13 +23,39 @@ dispatcher(127.0.0.1:9000)       ← 本仓库核心代码
 | 层 | 选型 | 说明 |
 |------|------|------|
 | 运行环境 | Python 3.10 venv(uv 管理)| ARM64 原生,Docker Rosetta 太慢不用 |
-| ASR | FunASR / SenseVoiceSmall(本地) | 中文识别,首次下载约 900MB |
-| LLM | 任意 OpenAI 兼容 + function_call | 默认 gpt-5.4 via 86gamestore,可换 openrouter / 自建 vLLM |
+| ASR | OpenAI ASR | 当前默认 `gpt-4o-mini-transcribe` |
+| LLM | OpenAI 官方接口 + function_call | 当前默认 `gpt-5.4` |
 | Intent | function_call | 复用主 LLM,不另起模型 |
 | TTS | EdgeTTS | 免费,zh-CN-XiaoxiaoNeural 女声 |
 | MCP | streamable-http(`mcp>=1.22`) | 官方 Python SDK |
 | 主后端 | [Hermes](https://github.com/nous-research/hermes) | `hermes chat -q ... -Q --yolo` |
-| 兜底 | [OpenClaw Lite](https://github.com/xinnan-tech/openclaw-lite) + Claude `-p` | `~/.openclaw/lite/bin/dispatch.sh` |
+
+---
+
+## 当前实现
+
+当前这套仓库默认跑的是宿主机 Python 服务,不是 Docker 主流程:
+
+- `xiaozhi-server`: `127.0.0.1:8000` / `127.0.0.1:8003`
+- `dispatcher`: `127.0.0.1:9000`
+- 测试页静态服务: `http://localhost:8006/test_page.html`
+
+当前已经落地的核心能力:
+
+- 只暴露 1 个 MCP 工具: `hermes_repo_task(task)`
+- 用户明确点名 `Hermes` / `Hummus` 时,server 会直接进入确认链,不再依赖模型首轮自己猜工具调用
+- 决策型请求新增 `pending_proposal` 会话态,必须先“采纳 / 拒绝”,确认后才真正执行 Hermes
+- 测试页新增“接受 / 拒绝”按钮,进入待确认态时会高亮,并插入待确认卡片
+- Hermes 默认工作目录固定为 `/Users/carlos_chen/Desktop/work_space/hemers_work_dir`
+- Hermes 工具超时和小智 `tool_call_timeout` 已统一为 `300s`
+
+适合的请求类型不只限写代码,也包括:
+
+- 读写文件
+- 分析仓库
+- 生成文档
+- 整理目录
+- 执行明确的工程类任务
 
 ---
 
@@ -67,45 +92,29 @@ cd xiaozhi-hackathon
 - 把 `data/.config.yaml` 和 `.mcp_server_settings.json` 软链到 xiaozhi-server 的 data 目录
 - 拷贝 `data/.config.yaml.example → data/.config.yaml`
 
-### 3. 填 LLM api_key
+### 3. 填 LLM / ASR api_key
 
-编辑 `data/.config.yaml`,找到 `LLM.Gpt54LLM`:
+编辑 `data/.config.yaml`,当前至少需要检查这两段:
 
 ```yaml
 LLM:
   Gpt54LLM:
     type: openai
-    model_name: gpt-5.4                       # 换成你的模型
-    base_url: https://api.86gamestore.com/v1  # 换成你的 base_url
-    api_key: YOUR_OPENAI_COMPATIBLE_API_KEY   # ⚠️ 必填
+    model_name: gpt-5.4
+    base_url: https://api.openai.com/v1
+    api_key: YOUR_OPENAI_API_KEY
+
+ASR:
+  OpenaiASR:
+    type: openai
+    api_key: YOUR_OPENAI_API_KEY
+    base_url: https://api.openai.com/v1/audio/transcriptions
+    model_name: gpt-4o-mini-transcribe
 ```
 
-**任何 OpenAI 兼容 + 支持 function_call 的接口都行**。比如:
-- [86gamestore](https://86gamestore.com) — 中转站,gpt/claude 都便宜
-- [openrouter](https://openrouter.ai) — 全球路由
-- [DeepSeek 官方](https://platform.deepseek.com) — deepseek-chat 支持 function_call
-- 自建 vLLM / ollama(需要模型本身支持 function_call)
+如果你要换成别的 OpenAI 兼容接口,改 `base_url` 和模型名即可。
 
-### 4. 修补小智源码(修首轮 MCP 竞态)
-
-打开 `repo/main/xiaozhi-server/core/connection.py`,找到 `chat()` 方法里 `functions = None` 那一段,替换为:
-
-```python
-functions = None
-if (self.intent_type == "function_call" and hasattr(self, "func_handler") and not force_final_answer):
-    # 等待 MCP 等异步初始化完成,避免首轮对话时 MCP 工具还没挂上
-    _init_wait = 0
-    while (self.func_handler is not None
-           and not getattr(self.func_handler, "finish_init", False)
-           and _init_wait < 50):
-        time.sleep(0.1)
-        _init_wait += 1
-    functions = self.func_handler.get_functions()
-```
-
-只加 7 行,修的是"首次对话时 MCP 工具还没注册完"的竞态。
-
-### 5. 启动
+### 4. 启动
 
 ```bash
 ./scripts/start.sh
@@ -113,35 +122,49 @@ if (self.intent_type == "function_call" and hasattr(self, "func_handler") and no
 # 停止:   ./scripts/stop.sh
 ```
 
-首次启动会自动下载 SenseVoiceSmall ASR 模型(约 900MB,5 分钟左右)。
+`scripts/start.sh` 现在已经补了 `nohup ... < /dev/null`,后台启动更稳定。
 
-### 6. 测试
+### 5. 测试
+
+先起测试页:
+
+```python
+python3 -m http.server 8006 --directory repo/main/xiaozhi-server/test
+```
+
+打开:
+
+- `http://localhost:8006/test_page.html`
+
+测试页连接参数:
+
+- `OTA服务器地址`: `http://127.0.0.1:8003/xiaozhi/ota/`
+- `WebSocket服务器地址`: 可留空,通常会由 OTA 自动回填
+
+推荐直接测试这条最小闭环:
+
+1. 说一句明确点名 Hermes 的话,例如:
+   `让 Hummus 在当前工作目录生成一份目录说明`
+2. 页面应出现 proposal 文案
+3. “接受 / 拒绝”按钮应高亮
+4. 点“接受”后才真正执行 Hermes
+5. 执行结果会继续在页面上显示并播报
+
+### 6. 验证 dispatcher
 
 ```bash
 cd dispatcher
 source .venv/bin/activate
 
-# ① dispatcher 自身(不经过小智)
-python3 test_client.py list                                # 列出 4 个 MCP 工具
-python3 test_client.py call list_agents                    # 应返回 agent 列表
-
-# ② 端到端 WebSocket(模拟小智设备发文字)
-python3 test_xiaozhi_ws.py "列出所有可用的 agent"
-python3 test_xiaozhi_ws.py "读今天的日报"
-python3 test_xiaozhi_ws.py "派 planner 用一句话总结今天最紧急的 3 件事"
-
-# ③ 真麦克风语音
-python3 -m http.server 8006 --directory \
-  repo/main/xiaozhi-server/test &
-open http://localhost:8006/test_page.html
-# 设置 → OTA 地址填: http://127.0.0.1:8003/xiaozhi/ota/
+# dispatcher 自身(不经过小智)
+python3 test_client.py list
 ```
 
 ---
 
-## 接入 Hermes(可选,作为主路后端)
+## 接入 Hermes
 
-Hermes 是本地运行的 agent CLI,走 OpenAI 兼容中转便宜。
+Hermes 是当前唯一暴露给模型的执行工具。
 
 ### 装 Hermes
 
@@ -176,56 +199,36 @@ dispatcher 会自动识别 `~/.local/bin/hermes`,在 `dispatch_agent` 调用时�
 
 ---
 
-## 接入 OpenClaw Lite(可选,作为强力兜底 + 提供 agent 身份)
-
-OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色 agent(main / planner / site-ops / support / overseas-dev / designer / keyword-miner)。
-
-### 装 OpenClaw Lite
-
-```bash
-# 克隆并装到 ~/.openclaw/lite/
-# (具体安装步骤参见 openclaw-lite 项目)
-```
-
-装好后应该能看到:
-- `~/.openclaw/lite/agents.json` — agent 注册表
-- `~/.openclaw/lite/bin/dispatch.sh` — 派发脚本
-- `~/.openclaw/workspace/logs/daily/YYYY-MM-DD.md` — 日报
-
-### 最简 agents.json 示例
-
-如果你不装完整 OpenClaw,可以手写一份最小 `~/.openclaw/lite/agents.json` 让 `list_agents` 和 `dispatch_agent(... via Hermes)` 工作:
-
-```json
-{
-  "agents": {
-    "main":          {"role": "主协调/默认执行", "emoji": "🎯"},
-    "planner":       {"role": "规划师/日报周报",  "emoji": "📋"},
-    "site-ops":      {"role": "运维监控",        "emoji": "🛡️"},
-    "support":       {"role": "客服邮件",        "emoji": "📬"},
-    "overseas-dev":  {"role": "出海开发/外链/SEO","emoji": "🌏"},
-    "designer":      {"role": "设计/品牌视觉",   "emoji": "🎨"},
-    "keyword-miner": {"role": "关键词挖掘",      "emoji": "⛏️"}
-  }
-}
-```
-
-没有 `dispatch.sh` 时,`dispatch_agent` 全部走 Hermes;没有日报文件时 `read_daily_report` 会返回空目录提示。
-
----
-
 ## MCP 工具(dispatcher 暴露)
 
-`http://127.0.0.1:9000/mcp` 暴露 4 个工具:
+`http://127.0.0.1:9000/mcp` 当前只暴露 1 个工具:
 
 | 工具 | 用途 | 调用路径 |
 |------|------|---------|
-| `list_agents()` | 列出 agent | 读 `~/.openclaw/lite/agents.json` |
-| `dispatch_agent(agent_id, task)` | 派发任务 | Hermes 主路 → Claude 兜底 |
-| `query_agent_status()` | 查最近一次任务 | 读 `/tmp/xiaozhi-dispatcher-state.json` |
-| `read_daily_report(date)` | 读日报 | 读 `~/.openclaw/workspace/logs/daily/*.md` |
+| `hermes_repo_task(task)` | 让 Hermes 在固定工作目录执行任务 | `Hermes CLI → /Users/carlos_chen/Desktop/work_space/hemers_work_dir` |
 
 想加新工具?在 `dispatcher/server.py` 加一个 `@mcp.tool()` 即可,小智会自动拿到。
+
+---
+
+## 确认链路
+
+当前所有显式点名 `Hermes` 的请求都走“先提案、后执行”的状态机:
+
+1. ASR 把语音转成文本
+2. server 命中“让/叫/交给 Hermes”规则
+3. 生成 `pending_proposal`
+4. 前端收到 proposal 结构化消息,高亮“接受 / 拒绝”
+5. 用户点击“接受”后,server 才真正调用 `hermes_repo_task`
+6. 用户点击“拒绝”后,清空 proposal,返回“已取消”
+
+这部分逻辑主要分布在:
+
+- `repo/main/xiaozhi-server/core/handle/proposalHandler.py`
+- `repo/main/xiaozhi-server/core/handle/intentHandler.py`
+- `repo/main/xiaozhi-server/test/test_page.html`
+- `repo/main/xiaozhi-server/test/js/ui/controller.js`
+- `repo/main/xiaozhi-server/test/js/core/network/websocket.js`
 
 ---
 
@@ -242,7 +245,7 @@ xiaozhi-hackathon/
 │   └── .mcp_server_settings.json # MCP 接入点:指向 127.0.0.1:9000
 ├── models/SenseVoiceSmall/       # ASR 模型(模型文件 .gitignore)
 ├── dispatcher/                   # 自研 MCP server
-│   ├── server.py                 # 4 个 MCP 工具
+│   ├── server.py                 # 只暴露 hermes_repo_task
 │   ├── test_client.py            # MCP client 测试
 │   ├── test_xiaozhi_ws.py        # WebSocket 端到端测试
 │   └── requirements.txt
