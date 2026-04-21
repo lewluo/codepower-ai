@@ -6,6 +6,7 @@ repo/main/*
 !repo/main/xiaozhi-server/**
 repo/main/xiaozhi-server/.venv/
 repo/main/xiaozhi-server/venv/
+repo/main/xiaozhi-server/data/
 repo/main/xiaozhi-server/tmp/
 repo/main/xiaozhi-server/**/*.log
 repo.tar.gz

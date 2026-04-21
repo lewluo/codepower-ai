@@ -4,6 +4,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+XZ_DIR="$PROJECT_DIR/repo/main/xiaozhi-server"
 cd "$PROJECT_DIR"
 
 # ── 前置检查 ───────────────────────────────────────────
@@ -11,13 +12,18 @@ command -v uv   >/dev/null || { echo "❌ 需要 uv: curl -LsSf https://astral.s
 command -v git  >/dev/null || { echo "❌ 需要 git"; exit 1; }
 
 echo "=== 1. 克隆 xiaozhi-esp32-server 源码 ==="
-if [ ! -d "repo/.git" ]; then
+if [ -d "$XZ_DIR" ]; then
+  echo "xiaozhi-server 已存在,跳过克隆"
+elif [ ! -d "repo/.git" ]; then
   git clone --depth=1 https://github.com/xinnan-tech/xiaozhi-esp32-server.git repo
 else
   echo "repo/ 已存在,跳过克隆"
 fi
-
-XZ_DIR="$PROJECT_DIR/repo/main/xiaozhi-server"
+if [ ! -d "$XZ_DIR" ]; then
+  echo "❌ 未找到 xiaozhi-server 目录: $XZ_DIR"
+  echo "   请确认 repo/ 是 xinnan-tech/xiaozhi-esp32-server 源码，或先清理错误的 repo/ 目录。"
+  exit 1
+fi
 
 echo ""
 echo "=== 2. 初始化 xiaozhi-server venv (Python 3.10) ==="
@@ -29,7 +35,15 @@ if [ ! -d "$XZ_DIR/.venv" ]; then
   .venv/bin/python -m pip install -r requirements.txt
   cd "$PROJECT_DIR"
 else
-  echo "xiaozhi venv 已存在,跳过"
+  if "$XZ_DIR/.venv/bin/python" -c "import funasr, mcp, torch, websocket" >/dev/null 2>&1; then
+    echo "xiaozhi venv 已存在,跳过"
+  else
+    echo "xiaozhi venv 不完整,补装依赖"
+    cd "$XZ_DIR"
+    .venv/bin/python -m ensurepip --upgrade
+    .venv/bin/python -m pip install -r requirements.txt
+    cd "$PROJECT_DIR"
+  fi
 fi
 
 echo ""

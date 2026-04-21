@@ -3,12 +3,25 @@ import asyncio
 import os
 import sys
 
+import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 
+def _local_http_client(headers=None, timeout=None, auth=None):
+    return httpx.AsyncClient(
+        headers=headers,
+        timeout=timeout,
+        auth=auth,
+        trust_env=False,
+    )
+
+
 async def main(url: str, action: str, *args: str):
-    async with streamablehttp_client(url) as (read, write, _):
+    async with streamablehttp_client(
+        url,
+        httpx_client_factory=_local_http_client,
+    ) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             if action == "list":
