@@ -3,10 +3,7 @@ OpenClaw Dispatcher — 小智语音的后端工具服务
 架构: 小智(Docker) → streamable-http MCP → 本服务(host:9000) → Hermes/OpenClaw
 
 工具:
-  list_agents()                    - 列出可用 agent
-  dispatch_agent(agent_id, task)   - 派发任务(Hermes 主路, Claude 兜底)
-  query_agent_status()             - 查询最近一次派发状态
-  read_daily_report(date='today')  - 读 OpenClaw 日报
+  hermes_repo_task(task)           - 直接调用 Hermes 处理通用任务
 """
 from __future__ import annotations
 
@@ -26,12 +23,13 @@ AGENTS_JSON = HOME / ".openclaw/lite/agents.json"
 DISPATCH_SH = HOME / ".openclaw/lite/bin/dispatch.sh"
 DAILY_LOG_DIR = HOME / ".openclaw/workspace/logs/daily"
 HERMES = HOME / ".local/bin/hermes"
+WORKSPACE_DIR = Path("/Users/carlos_chen/Desktop/work_space/hemers_work_dir")
 
 STATE_FILE = Path("/tmp/xiaozhi-dispatcher-state.json")
 RUNS_DIR = Path("/tmp/xiaozhi-dispatcher-runs")
 RUNS_DIR.mkdir(exist_ok=True)
 
-HERMES_TIMEOUT_SEC = 45          # 语音场景下不要太长,保证"声音在说"的体感
+HERMES_TIMEOUT_SEC = 90          # 与 xiaozhi 的 tool_call_timeout 保持一致
 CLAUDE_FALLBACK_TIMEOUT_SEC = 120
 
 mcp = FastMCP("openclaw-dispatcher")
@@ -80,6 +78,7 @@ async def _run_hermes(task_prompt: str, timeout: int) -> tuple[bool, str]:
             "--source", "tool",         # 不污染会话列表
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=str(WORKSPACE_DIR),
         )
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         text = out.decode("utf-8", errors="replace").strip()
@@ -134,7 +133,6 @@ async def _run_claude_dispatch(agent_id: str, task: str, timeout: int) -> tuple[
 
 # ========== MCP 工具 ==========
 
-@mcp.tool()
 async def list_agents() -> str:
     """列出所有可用的 OpenClaw agent 及其角色职责。在用户问"有哪些 agent"时调用。"""
     agents = _load_agents()
@@ -146,7 +144,6 @@ async def list_agents() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
 async def dispatch_agent(agent_id: str, task: str) -> str:
     """派发一个任务给指定 agent 执行。
     优先走 Hermes(gpt-5.4,免费快速),Hermes 失败自动回落 OpenClaw(Claude,更强但有费用)。
@@ -209,6 +206,59 @@ async def dispatch_agent(agent_id: str, task: str) -> str:
 
 
 @mcp.tool()
+async def hermes_repo_task(task: str) -> str:
+    """直接调用 Hermes 在当前工作目录内执行通用任务。
+
+    适用场景:
+      - 修改代码 / 修 bug / 实现功能 / 分析仓库
+      - 读取文件 / 组织目录 / 生成文档 / 执行通用工程任务
+      - 任何明确交给 Hermes 处理的工作
+
+    参数:
+      task: 直接描述要在当前工作目录完成的任务
+
+    返回: Hermes 的简短执行结果摘要
+    """
+    run_id = f"hermes_{int(time.time())}"
+    started = datetime.now().isoformat(timespec="seconds")
+    full_prompt = (
+        f"你正在工作目录 {WORKSPACE_DIR} 中处理真实任务。\n"
+        "不要只给建议；如果任务要求执行、修改、整理、生成内容，就直接完成。\n"
+        "先阅读相关文件或环境再动手，避免误改无关内容。\n"
+        "完成后用简短中文总结结果；如果改了文件，带上文件路径；如果没改动，也直接说明原因。\n\n"
+        f"任务: {task}"
+    )
+
+    state = {
+        "run_id": run_id,
+        "tool": "hermes_repo_task",
+        "task": task,
+        "started": started,
+        "status": "running",
+        "backend": "hermes",
+        "workspace": str(WORKSPACE_DIR),
+    }
+    _save_state(state)
+
+    ok, result = await _run_hermes(full_prompt, HERMES_TIMEOUT_SEC)
+    finished = datetime.now().isoformat(timespec="seconds")
+    state.update(
+        {
+            "finished": finished,
+            "status": "success" if ok else "failed",
+            "result": result[:4000],
+        }
+    )
+    _save_state(state)
+    (RUNS_DIR / f"{run_id}.json").write_text(
+        json.dumps(state, ensure_ascii=False, indent=2)
+    )
+
+    if ok:
+        return f"[hermes 已完成] {result}"
+    return f"[Hermes 失败] {result[:500]}"
+
+
 async def query_agent_status() -> str:
     """查询最近一次派发任务的执行状态。在用户问"刚才那个任务好了吗"时调用。"""
     state = _load_state()
@@ -234,7 +284,6 @@ async def query_agent_status() -> str:
     return f"{agent_id} 执行{status}:{state.get('result', '')[:400]}"
 
 
-@mcp.tool()
 async def read_daily_report(date: str = "today") -> str:
     """读取 OpenClaw 日报。在用户问"今天日报""昨天做了什么"时调用。
 
@@ -270,7 +319,9 @@ async def read_daily_report(date: str = "today") -> str:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9000"))
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[dispatcher] MCP streamable-http on 0.0.0.0:{port}/mcp")
+    print(f"[dispatcher] workspace: {WORKSPACE_DIR}")
     print(f"[dispatcher] agents: {list(_load_agents().keys())}")
     print(f"[dispatcher] hermes: {HERMES} ({'ok' if HERMES.exists() else 'MISSING'})")
     print(f"[dispatcher] dispatch.sh: {DISPATCH_SH} ({'ok' if DISPATCH_SH.exists() else 'MISSING'})")

@@ -15,7 +15,7 @@ source .venv/bin/activate
 unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export NO_PROXY=127.0.0.1,localhost
 
-nohup python3 server.py > "$PROJECT_DIR/dispatcher.log" 2>&1 &
+nohup python3 server.py < /dev/null > "$PROJECT_DIR/dispatcher.log" 2>&1 &
 DISPATCHER_PID=$!
 echo "dispatcher PID=$DISPATCHER_PID -> $PROJECT_DIR/dispatcher.log"
 sleep 2
@@ -40,7 +40,7 @@ sleep 1
 cd "$XZ_DIR"
 unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export NO_PROXY=127.0.0.1,localhost
-nohup ./.venv/bin/python app.py > "$PROJECT_DIR/xiaozhi-server.log" 2>&1 &
+nohup ./.venv/bin/python app.py < /dev/null > "$PROJECT_DIR/xiaozhi-server.log" 2>&1 &
 XZ_PID=$!
 echo "xiaozhi-server PID=$XZ_PID -> $PROJECT_DIR/xiaozhi-server.log"
 
