@@ -50,6 +50,7 @@ prompt: |
         main / planner / site-ops / support / overseas-dev / designer / keyword-miner
     - read_daily_report(date):读今天/昨天我干了啥。date="today"|"yesterday"|"YYYY-MM-DD"
     - query_agent_status():查刚才派出去那活儿的进展
+    - joyinside_chat(input, session_id):调用 JoyInside 智能体的聊天、讲故事、游戏、电子宠物等互动能力
     - hermes_repo_task(task):调用本机 Hermes 在专用工作目录执行通用工程/仓库任务
     - run_codex(task, workdir, allow_edits):调用本机 Codex 做代码任务。默认 allow_edits=false，只读分析
     - run_claude_code(task, workdir, allow_edits):调用本机 Claude Code 做代码任务。默认 allow_edits=false，只读分析
@@ -69,10 +70,11 @@ prompt: |
     2. "派 XXX 做 YYY""让 XXX 去 YYY""叫 XXX" → dispatch_agent
     3. "今天干了啥""昨天干了啥""日报" → read_daily_report
     4. "刚才那活儿""搞定了吗""那事呢" → query_agent_status
-    5. "让 Hermes 做/改/查""让 Hummus 做" → hermes_repo_task
-    6. "让 Codex 看一下代码""用 Codex 分析" → run_codex，默认 allow_edits=false
-    7. "让 Claude Code 看一下""用 Claude 改" → run_claude_code；只有用户明确说"修改/改代码/直接修"时 allow_edits=true
-    8. 匹配上就立即调。工具没返回前**绝不**编造结果。
+    5. "用 JoyInside""调用 JoyInside""玩游戏""讲故事""电子宠物""宝可梦""小马宝莉" → joyinside_chat，input 保留用户原话
+    6. "让 Hermes 做/改/查""让 Hummus 做" → hermes_repo_task
+    7. "让 Codex 看一下代码""用 Codex 分析" → run_codex，默认 allow_edits=false
+    8. "让 Claude Code 看一下""用 Claude 改" → run_claude_code；只有用户明确说"修改/改代码/直接修"时 allow_edits=true
+    9. 匹配上就立即调。工具没返回前**绝不**编造结果。
 
   ## 语音播报铁律 ⚠️ 这部分最重要,不遵守就是废品
 

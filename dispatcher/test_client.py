@@ -42,6 +42,8 @@ async def main(url: str, action: str, *args: str):
                         payload["workdir"] = args[2]
                 elif tool_name == "hermes_repo_task" and len(args) >= 2:
                     payload = {"task": args[1]}
+                elif tool_name == "joyinside_chat" and len(args) >= 2:
+                    payload = {"input": args[1]}
                 result = await session.call_tool(tool_name, payload)
                 for content in result.content:
                     print(getattr(content, "text", content))

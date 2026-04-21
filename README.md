@@ -228,6 +228,7 @@ OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色
 | `dispatch_agent(agent_id, task)` | 派发任务 | Hermes 主路 → Claude 兜底 |
 | `query_agent_status()` | 查最近一次任务 | 读 `/tmp/xiaozhi-dispatcher-state.json` |
 | `read_daily_report(date)` | 读日报 | 读 `~/.openclaw/workspace/logs/daily/*.md` |
+| `joyinside_chat(input, session_id)` | 调 JoyInside 智能体 | JoyInside token → voiceChat WebSocket |
 | `hermes_repo_task(task)` | 让 Hermes 执行通用工程任务 | 默认 `~/Desktop/work_space/hemers_work_dir`，可用 `CODEPOWER_HERMES_WORKSPACE` 改 |
 | `run_codex(task, workdir, allow_edits)` | 调本机 Codex CLI | 默认只读，明确修改时才允许编辑 |
 | `run_claude_code(task, workdir, allow_edits)` | 调本机 Claude Code CLI | 默认只读，明确修改时才允许编辑 |

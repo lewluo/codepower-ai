@@ -14,16 +14,22 @@ OpenClaw Dispatcher — 小智语音的后端工具服务
 from __future__ import annotations
 
 import asyncio
+import binascii
+import hashlib
+import hmac
 import json
 import os
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import requests
+import websocket
 from mcp.server.fastmcp import FastMCP
 
 HOME = Path.home()
@@ -49,6 +55,27 @@ HERMES_REPO_TIMEOUT_SEC = 300
 CLAUDE_FALLBACK_TIMEOUT_SEC = 120
 CODEX_TIMEOUT_SEC = 180
 CLAUDE_CODE_TIMEOUT_SEC = 180
+JOYINSIDE_TIMEOUT_SEC = 20
+JOYINSIDE_MAX_WAIT_SEC = 60
+
+JOYINSIDE_AUTH_URL = os.environ.get(
+    "JOYINSIDE_AUTH_URL", "https://api.joyinside.com/auth/getToken"
+)
+JOYINSIDE_REGISTER_URL = os.environ.get(
+    "JOYINSIDE_REGISTER_URL", "https://api.joyinside.com/device/register"
+)
+JOYINSIDE_WS_URL = os.environ.get(
+    "JOYINSIDE_WS_URL", "wss://ws.joyinside.com/soulmate/voiceChat/v1"
+)
+JOYINSIDE_ACCESS_KEY = os.environ.get("JOYINSIDE_ACCESS_KEY", "")
+JOYINSIDE_SECRET_KEY = os.environ.get("JOYINSIDE_SECRET_KEY", "")
+JOYINSIDE_VENDOR_ID = os.environ.get("JOYINSIDE_VENDOR_ID", "")
+JOYINSIDE_APP_ID = os.environ.get("JOYINSIDE_APP_ID", "")
+JOYINSIDE_BOT_ID = os.environ.get("JOYINSIDE_BOT_ID", "")
+JOYINSIDE_DEVICE_ID = os.environ.get("JOYINSIDE_DEVICE_ID", "codepower-local-xiaozhi")
+JOYINSIDE_DEVICE_NAME = os.environ.get("JOYINSIDE_DEVICE_NAME", "CodePower-Local-Xiaozhi")
+JOYINSIDE_UID = os.environ.get("JOYINSIDE_UID", "codepower-local-user")
+_JOYINSIDE_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
 
 mcp = FastMCP("openclaw-dispatcher")
 
@@ -181,6 +208,173 @@ def _resolve_workdir(workdir: Optional[str]) -> Path:
     if not path.is_absolute():
         path = Path.cwd() / path
     return path.resolve()
+
+
+def _joyinside_missing_config() -> list[str]:
+    required = {
+        "JOYINSIDE_ACCESS_KEY": JOYINSIDE_ACCESS_KEY,
+        "JOYINSIDE_SECRET_KEY": JOYINSIDE_SECRET_KEY,
+        "JOYINSIDE_VENDOR_ID": JOYINSIDE_VENDOR_ID,
+        "JOYINSIDE_APP_ID": JOYINSIDE_APP_ID,
+    }
+    return [name for name, value in required.items() if not value]
+
+
+def _joyinside_sign(params: dict[str, str]) -> str:
+    lower_params = {key.lower(): str(value) for key, value in params.items()}
+    joint_params = "&".join(
+        f"{key}={value}" for key, value in sorted(lower_params.items())
+    )
+    digest = hmac.new(
+        JOYINSIDE_SECRET_KEY.encode("utf-8"),
+        joint_params.encode("utf-8"),
+        digestmod=hashlib.md5,
+    ).digest()
+    return binascii.hexlify(digest).decode("utf-8")
+
+
+def _joyinside_auth_payload() -> dict[str, str]:
+    params = {
+        "accessKeyId": JOYINSIDE_ACCESS_KEY,
+        "accessTimestamp": str(int(time.time() * 1000)),
+        "accessNonce": str(uuid.uuid4()),
+        "accessVersion": "V2",
+    }
+    params["accessSign"] = _joyinside_sign(params)
+    return params
+
+
+def _joyinside_post(url: str, **kwargs) -> requests.Response:
+    session = requests.Session()
+    session.trust_env = False
+    return session.post(url, timeout=JOYINSIDE_TIMEOUT_SEC, **kwargs)
+
+
+def _joyinside_get_token(*, bot_id: str | None = None) -> str:
+    scope = f"bot:{bot_id}" if bot_id else f"vendor:{JOYINSIDE_VENDOR_ID}"
+    cached = _JOYINSIDE_TOKEN_CACHE.get(scope)
+    now = time.time()
+    if cached and now < cached[1] - 60:
+        return cached[0]
+
+    payload = _joyinside_auth_payload()
+    if bot_id:
+        payload["botId"] = bot_id
+    else:
+        payload["vendorId"] = JOYINSIDE_VENDOR_ID
+
+    response = _joyinside_post(JOYINSIDE_AUTH_URL, json=payload)
+    response.raise_for_status()
+    data = response.json()
+    token = data.get("accessToken")
+    if not token:
+        raise RuntimeError(
+            f"JoyInside 获取 token 失败: code={data.get('code')} msg={data.get('msg')}"
+        )
+    _JOYINSIDE_TOKEN_CACHE[scope] = (token, now + int(data.get("expireIn", 7200)))
+    return token
+
+
+def _joyinside_register_device() -> str:
+    token = _joyinside_get_token()
+    payload = {
+        "vendorId": JOYINSIDE_VENDOR_ID,
+        "appId": JOYINSIDE_APP_ID,
+        "type": "APP_ROBOT",
+        "name": JOYINSIDE_DEVICE_NAME,
+        "deviceId": JOYINSIDE_DEVICE_ID,
+        "deviceModel": "codepower-xiaozhi-tool",
+        "desc": "CodePower dispatcher to JoyInside tool bridge",
+    }
+    response = _joyinside_post(
+        JOYINSIDE_REGISTER_URL,
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+    )
+    response.raise_for_status()
+    data = response.json()
+    bot_id = data.get("data")
+    if not bot_id:
+        raise RuntimeError(
+            f"JoyInside 注册设备失败: state={data.get('state')} code={data.get('code')} result={data.get('result')}"
+        )
+    return bot_id
+
+
+def _joyinside_resolve_bot_id() -> str:
+    global JOYINSIDE_BOT_ID
+    if JOYINSIDE_BOT_ID:
+        return JOYINSIDE_BOT_ID
+    JOYINSIDE_BOT_ID = _joyinside_register_device()
+    return JOYINSIDE_BOT_ID
+
+
+def _joyinside_chat_sync(input: str, session_id: str = "codepower-tool") -> str:
+    missing = _joyinside_missing_config()
+    if missing:
+        return f"JoyInside 未配置: {', '.join(missing)}"
+    if not input.strip():
+        return "JoyInside 输入为空。"
+
+    bot_id = _joyinside_resolve_bot_id()
+    token = _joyinside_get_token(bot_id=bot_id)
+    request_id = str(uuid.uuid4())
+    ws_session_id = f"{bot_id}_{session_id or uuid.uuid4().hex}"
+    url = (
+        f"{JOYINSIDE_WS_URL}?botId={bot_id}"
+        f"&sessionId={ws_session_id}&requestId={request_id}"
+    )
+
+    ws = websocket.create_connection(
+        url,
+        header=[f"Authorization: Bearer {token}"],
+        timeout=JOYINSIDE_TIMEOUT_SEC,
+    )
+    chunks: list[str] = []
+    try:
+        ws.send(
+            json.dumps(
+                {
+                    "mid": str(uuid.uuid4()),
+                    "contentType": "TEXT",
+                    "uid": JOYINSIDE_UID,
+                    "content": {"input": input.strip()},
+                },
+                ensure_ascii=False,
+            )
+        )
+
+        start = time.time()
+        while time.time() - start < JOYINSIDE_MAX_WAIT_SEC:
+            raw = ws.recv()
+            if isinstance(raw, bytes):
+                continue
+
+            message = json.loads(raw)
+            content = message.get("content") or {}
+            content_type = message.get("contentType")
+
+            if message.get("code") not in (None, 200):
+                raise RuntimeError(
+                    f"JoyInside 下行错误: code={message.get('code')} msg={message.get('msg')}"
+                )
+
+            if content_type in {"AGENT", "ACTIVITY"}:
+                text = content.get("content") or ""
+                if text:
+                    chunks.append(text)
+                if content.get("finishReason") == "stop":
+                    break
+
+            if content_type == "EVENT":
+                event_type = content.get("eventType")
+                if event_type in {"COMPLETE", "EMPTY_CONTENT"}:
+                    break
+    finally:
+        ws.close()
+
+    text = "".join(chunks).strip()
+    return text or "JoyInside 没有返回文本。"
 
 
 # ========== MCP 工具 ==========
@@ -317,6 +511,26 @@ async def hermes_repo_task(task: str) -> str:
     if ok:
         return f"[hermes 已完成] {result}"
     return f"[Hermes 失败] {result[:500]}"
+
+
+@mcp.tool()
+async def joyinside_chat(input: str, session_id: str = "codepower-tool") -> str:
+    """调用 JoyInside 智能体的文本对话能力。
+
+    适用场景:
+      - 用户明确说"用 JoyInside"、"调用 JoyInside"
+      - 玩游戏、讲故事、电子宠物、宝可梦、小马宝莉等 JoyInside bot 支持的陪伴/互动能力
+
+    参数:
+      input: 交给 JoyInside 智能体的原始用户请求
+      session_id: 可选会话 ID，相同 ID 可维持 JoyInside 多轮上下文
+
+    返回: JoyInside 智能体返回的文本
+    """
+    try:
+        return await asyncio.to_thread(_joyinside_chat_sync, input, session_id)
+    except Exception as e:
+        return f"[JoyInside 失败] {type(e).__name__}: {e}"
 
 
 @mcp.tool()
