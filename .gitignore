@@ -1,5 +1,14 @@
-# ── 第三方源码(克隆,不进仓库) ──────────────────────
-repo/
+# ── 第三方源码(默认不进仓库,仅放行 xiaozhi-server) ─────
+repo/*
+!repo/main/
+repo/main/*
+!repo/main/xiaozhi-server/
+!repo/main/xiaozhi-server/**
+repo/main/xiaozhi-server/.venv/
+repo/main/xiaozhi-server/venv/
+repo/main/xiaozhi-server/tmp/
+repo/main/xiaozhi-server/**/*.log
+repo.tar.gz
 
 # ── 大模型文件(近 1GB) ──────────────────────────────
 models/**/*.pt
