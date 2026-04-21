@@ -7,12 +7,16 @@
 #   然后把下面的 YOUR_XXX 替换成你自己的 key
 
 server:
-  # 网页/设备连这个地址,换成宿主机局域网 IP 或 localhost
-  websocket: ws://127.0.0.1:8000/xiaozhi/v1/
-  vision_explain: http://127.0.0.1:8003/mcp/vision/explain
+  ip: 0.0.0.0
+  port: 8000
+  http_port: 8003
+  # 硬件走 OTA 时，保留“你的”占位符会自动替换成当前宿主机局域网 IP。
+  # 只做本机网页测试时，可临时改成 ws://127.0.0.1:8000/xiaozhi/v1/。
+  websocket: ws://你的局域网IP:8000/xiaozhi/v1/
+  vision_explain: http://你的局域网IP:8003/mcp/vision/explain
 
 # MCP 工具调用的超时时间(秒) — dispatch_agent 走 Hermes 需要时间
-tool_call_timeout: 90
+tool_call_timeout: 300
 
 # 使用模块
 selected_module:
@@ -45,6 +49,9 @@ prompt: |
         main / planner / site-ops / support / overseas-dev / designer / keyword-miner
     - read_daily_report(date):读今天/昨天我干了啥。date="today"|"yesterday"|"YYYY-MM-DD"
     - query_agent_status():查刚才派出去那活儿的进展
+    - hermes_repo_task(task):调用本机 Hermes 在专用工作目录执行通用工程/仓库任务
+    - run_codex(task, workdir, allow_edits):调用本机 Codex 做代码任务。默认 allow_edits=false，只读分析
+    - run_claude_code(task, workdir, allow_edits):调用本机 Claude Code 做代码任务。默认 allow_edits=false，只读分析
     - get_lunar():查农历(开发者也要过节)
 
   ## 分身职责速记(给用户解释时用中文名)
@@ -61,7 +68,10 @@ prompt: |
     2. "派 XXX 做 YYY""让 XXX 去 YYY""叫 XXX" → dispatch_agent
     3. "今天干了啥""昨天干了啥""日报" → read_daily_report
     4. "刚才那活儿""搞定了吗""那事呢" → query_agent_status
-    5. 匹配上就立即调。工具没返回前**绝不**编造结果。
+    5. "让 Hermes 做/改/查""让 Hummus 做" → hermes_repo_task
+    6. "让 Codex 看一下代码""用 Codex 分析" → run_codex，默认 allow_edits=false
+    7. "让 Claude Code 看一下""用 Claude 改" → run_claude_code；只有用户明确说"修改/改代码/直接修"时 allow_edits=true
+    8. 匹配上就立即调。工具没返回前**绝不**编造结果。
 
   ## 语音播报铁律 ⚠️ 这部分最重要,不遵守就是废品
 
@@ -105,6 +115,7 @@ prompt: |
     - 不废话、不寒暄、不恭维。
     - 每句话都要对"干活"有用,或对"理解上下文"有用。
     - 口头禅可用:"好""这就来""搞定""没问题""等等——先确认下"。
+    - 调用 hermes_repo_task、run_codex 或 run_claude_code 时，task 必须保留用户原始约束。用户说"只回复 OK"就传"只回复 OK"，不要扩展成项目分析。
 
 # LLM 配置 — 使用 OpenAI 兼容中转,例如 86gamestore / openrouter / 自建 vLLM
 # 任何 OpenAI 兼容接口 + 支持 function_call 的模型即可

@@ -7,13 +7,18 @@ OpenClaw Dispatcher — 小智语音的后端工具服务
   dispatch_agent(agent_id, task)   - 派发任务(Hermes 主路, Claude 兜底)
   query_agent_status()             - 查询最近一次派发状态
   read_daily_report(date='today')  - 读 OpenClaw 日报
+  hermes_repo_task(task)           - 调 Hermes 在专用工作目录执行仓库任务
+  run_codex(task, ...)             - 调本机 Codex CLI
+  run_claude_code(task, ...)       - 调本机 Claude Code CLI
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,13 +31,24 @@ AGENTS_JSON = HOME / ".openclaw/lite/agents.json"
 DISPATCH_SH = HOME / ".openclaw/lite/bin/dispatch.sh"
 DAILY_LOG_DIR = HOME / ".openclaw/workspace/logs/daily"
 HERMES = HOME / ".local/bin/hermes"
+CODEX = shutil.which("codex")
+CLAUDE = shutil.which("claude")
+WORKSPACE_DIR = Path(
+    os.environ.get(
+        "CODEPOWER_HERMES_WORKSPACE",
+        str(HOME / "Desktop/work_space/hemers_work_dir"),
+    )
+).expanduser()
 
 STATE_FILE = Path("/tmp/xiaozhi-dispatcher-state.json")
 RUNS_DIR = Path("/tmp/xiaozhi-dispatcher-runs")
 RUNS_DIR.mkdir(exist_ok=True)
 
 HERMES_TIMEOUT_SEC = 45          # 语音场景下不要太长,保证"声音在说"的体感
+HERMES_REPO_TIMEOUT_SEC = 300
 CLAUDE_FALLBACK_TIMEOUT_SEC = 120
+CODEX_TIMEOUT_SEC = 180
+CLAUDE_CODE_TIMEOUT_SEC = 180
 
 mcp = FastMCP("openclaw-dispatcher")
 
@@ -67,7 +83,9 @@ def _load_state() -> dict:
         return {}
 
 
-async def _run_hermes(task_prompt: str, timeout: int) -> tuple[bool, str]:
+async def _run_hermes(
+    task_prompt: str, timeout: int, cwd: Optional[Path] = None
+) -> tuple[bool, str]:
     """调 Hermes 非交互模式,返回 (成功, 结果文本)"""
     if not HERMES.exists():
         return False, "Hermes 未安装"
@@ -78,6 +96,7 @@ async def _run_hermes(task_prompt: str, timeout: int) -> tuple[bool, str]:
             "-Q",                       # quiet: 只输出最终回复
             "--yolo",                   # 跳过确认
             "--source", "tool",         # 不污染会话列表
+            cwd=str(cwd) if cwd else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -130,6 +149,38 @@ async def _run_claude_dispatch(agent_id: str, task: str, timeout: int) -> tuple[
         return False, f"Claude 派发超时 ({timeout}s)"
     except Exception as e:
         return False, f"Claude 派发异常: {type(e).__name__}: {e}"
+
+
+async def _run_command(cmd: list[str], timeout: int, cwd: Path) -> tuple[bool, str]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        text = out.decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            return False, f"exit={proc.returncode}: {text[:1200]}"
+        return True, text or "(无输出)"
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return False, f"超时 ({timeout}s)"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _resolve_workdir(workdir: Optional[str]) -> Path:
+    if not workdir:
+        return Path.cwd()
+    path = Path(workdir).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve()
 
 
 # ========== MCP 工具 ==========
@@ -209,6 +260,66 @@ async def dispatch_agent(agent_id: str, task: str) -> str:
 
 
 @mcp.tool()
+async def hermes_repo_task(task: str) -> str:
+    """调用 Hermes 在专用工作目录执行通用工程任务。
+
+    适用场景:
+      - 用户明确说"让 Hermes/Hummus 做/改/查/生成"
+      - 修改代码、分析仓库、生成文档、整理目录等工程任务
+
+    参数:
+      task: 直接描述要完成的任务，保留用户原始约束
+
+    返回: Hermes 的简短执行结果摘要
+    """
+    try:
+        WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return f"[Hermes 失败] 工作目录不可用: {WORKSPACE_DIR} ({type(e).__name__}: {e})"
+
+    run_id = f"hermes_{int(time.time())}"
+    started = datetime.now().isoformat(timespec="seconds")
+    full_prompt = (
+        f"你正在工作目录 {WORKSPACE_DIR} 中处理真实任务。\n"
+        "不要只给建议；如果任务要求执行、修改、整理、生成内容，就直接完成。\n"
+        "先阅读相关文件或环境再动手，避免误改无关内容。\n"
+        "完成后用简短中文总结结果；如果改了文件，带上文件路径；如果没改动，也直接说明原因。\n\n"
+        f"任务: {task}"
+    )
+
+    state = {
+        "run_id": run_id,
+        "tool": "hermes_repo_task",
+        "task": task,
+        "started": started,
+        "status": "running",
+        "backend": "hermes",
+        "workspace": str(WORKSPACE_DIR),
+    }
+    _save_state(state)
+
+    ok, result = await _run_hermes(
+        full_prompt, HERMES_REPO_TIMEOUT_SEC, cwd=WORKSPACE_DIR
+    )
+    finished = datetime.now().isoformat(timespec="seconds")
+    state.update(
+        {
+            "finished": finished,
+            "status": "success" if ok else "failed",
+            "result": result[:4000],
+        }
+    )
+    _save_state(state)
+    (RUNS_DIR / f"{run_id}.json").write_text(
+        json.dumps(state, ensure_ascii=False, indent=2)
+    )
+
+    if ok:
+        return f"[hermes 已完成] {result}"
+    return f"[Hermes 失败] {result[:500]}"
+
+
+@mcp.tool()
 async def query_agent_status() -> str:
     """查询最近一次派发任务的执行状态。在用户问"刚才那个任务好了吗"时调用。"""
     state = _load_state()
@@ -266,14 +377,106 @@ async def read_daily_report(date: str = "today") -> str:
     return fallback_note + text
 
 
+@mcp.tool()
+async def run_codex(task: str, workdir: str = "", allow_edits: bool = False) -> str:
+    """调用本机 Codex CLI 执行代码任务。默认只读分析；只有用户明确要求修改代码时才把 allow_edits 设为 true。
+
+    参数:
+      task: 交给 Codex 的自然语言任务
+      workdir: 工作目录，默认使用 dispatcher 当前目录
+      allow_edits: 是否允许 Codex 修改工作区。默认 false，只读。
+
+    返回: Codex 最终输出摘要
+    """
+    if not CODEX:
+        return "Codex CLI 未安装或不在 PATH 中。"
+    cwd = _resolve_workdir(workdir)
+    if not cwd.exists():
+        return f"工作目录不存在: {cwd}"
+
+    with tempfile.NamedTemporaryFile(prefix="codex-last-", suffix=".txt", delete=False) as tmp:
+        output_path = Path(tmp.name)
+    try:
+        cmd = [
+            CODEX,
+            "exec",
+            "--cd",
+            str(cwd),
+            "--skip-git-repo-check",
+            "--color",
+            "never",
+            "--output-last-message",
+            str(output_path),
+            "-c",
+            "model_reasoning_effort=\"low\"",
+        ]
+        if allow_edits:
+            cmd += ["--full-auto"]
+        else:
+            cmd += ["--sandbox", "read-only"]
+        cmd.append(task)
+
+        ok, result = await _run_command(cmd, CODEX_TIMEOUT_SEC, cwd)
+        if output_path.exists():
+            final_text = output_path.read_text(encoding="utf-8", errors="replace").strip()
+            if final_text:
+                result = final_text
+    finally:
+        try:
+            output_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    prefix = "[Codex 已完成]" if ok else "[Codex 失败]"
+    return f"{prefix} {result[:2000]}"
+
+
+@mcp.tool()
+async def run_claude_code(task: str, workdir: str = "", allow_edits: bool = False) -> str:
+    """调用本机 Claude Code 执行代码任务。默认只读分析；只有用户明确要求修改代码时才把 allow_edits 设为 true。
+
+    参数:
+      task: 交给 Claude Code 的自然语言任务
+      workdir: 工作目录，默认使用 dispatcher 当前目录
+      allow_edits: 是否允许 Claude Code 修改工作区。默认 false，只读。
+
+    返回: Claude Code 最终输出摘要
+    """
+    if not CLAUDE:
+        return "Claude Code CLI 未安装或不在 PATH 中。"
+    cwd = _resolve_workdir(workdir)
+    if not cwd.exists():
+        return f"工作目录不存在: {cwd}"
+
+    cmd = [
+        CLAUDE,
+        "-p",
+        task,
+        "--output-format",
+        "text",
+        "--no-session-persistence",
+    ]
+    if allow_edits:
+        cmd += ["--permission-mode", "acceptEdits"]
+    else:
+        cmd += ["--allowedTools", "Read,Grep,Glob,LS"]
+
+    ok, result = await _run_command(cmd, CLAUDE_CODE_TIMEOUT_SEC, cwd)
+    prefix = "[Claude Code 已完成]" if ok else "[Claude Code 失败]"
+    return f"{prefix} {result[:2000]}"
+
+
 # ========== 启动 ==========
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9000"))
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[dispatcher] MCP streamable-http on 0.0.0.0:{port}/mcp")
     print(f"[dispatcher] agents: {list(_load_agents().keys())}")
     print(f"[dispatcher] hermes: {HERMES} ({'ok' if HERMES.exists() else 'MISSING'})")
+    print(f"[dispatcher] hermes workspace: {WORKSPACE_DIR}")
     print(f"[dispatcher] dispatch.sh: {DISPATCH_SH} ({'ok' if DISPATCH_SH.exists() else 'MISSING'})")
+    print(f"[dispatcher] codex: {CODEX or 'MISSING'}")
+    print(f"[dispatcher] claude: {CLAUDE or 'MISSING'}")
     # FastMCP streamable-http 默认路径 /mcp,端口通过 settings
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = port

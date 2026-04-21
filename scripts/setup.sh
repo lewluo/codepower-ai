@@ -26,7 +26,7 @@ if [ ! -d "$XZ_DIR/.venv" ]; then
   cd "$XZ_DIR"
   uv venv --python 3.10 .venv
   .venv/bin/python -m ensurepip --upgrade
-  .venv/bin/pip install -r requirements.txt
+  .venv/bin/python -m pip install -r requirements.txt
   cd "$PROJECT_DIR"
 else
   echo "xiaozhi venv 已存在,跳过"
@@ -38,7 +38,7 @@ if [ ! -d "$PROJECT_DIR/dispatcher/.venv" ]; then
   cd "$PROJECT_DIR/dispatcher"
   uv venv .venv
   .venv/bin/python -m ensurepip --upgrade
-  .venv/bin/pip install -r requirements.txt
+  .venv/bin/python -m pip install -r requirements.txt
   cd "$PROJECT_DIR"
 else
   echo "dispatcher venv 已存在,跳过"

@@ -4,3 +4,5 @@
 mcp>=1.22.0           # 官方 Python SDK(含 FastMCP + streamable-http client/server)
 websockets>=12.0      # test_xiaozhi_ws.py 用来模拟设备直连小智
 httpx>=0.27.0         # mcp 依赖,显式写出来便于离线环境预装
+starlette>=0.27.0     # JoyInside skill gateway HTTP/SSE
+uvicorn>=0.31.1       # JoyInside skill gateway dev server

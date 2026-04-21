@@ -1,5 +1,6 @@
 """Quick MCP client to verify dispatcher works locally."""
 import asyncio
+import os
 import sys
 
 from mcp import ClientSession
@@ -22,6 +23,12 @@ async def main(url: str, action: str, *args: str):
                     payload = {"agent_id": args[1], "task": args[2]}
                 elif tool_name == "read_daily_report" and len(args) >= 2:
                     payload = {"date": args[1]}
+                elif tool_name in {"run_codex", "run_claude_code"} and len(args) >= 2:
+                    payload = {"task": args[1]}
+                    if len(args) >= 3:
+                        payload["workdir"] = args[2]
+                elif tool_name == "hermes_repo_task" and len(args) >= 2:
+                    payload = {"task": args[1]}
                 result = await session.call_tool(tool_name, payload)
                 for content in result.content:
                     print(getattr(content, "text", content))
@@ -29,6 +36,6 @@ async def main(url: str, action: str, *args: str):
 
 
 if __name__ == "__main__":
-    url = "http://127.0.0.1:9000/mcp"
+    url = os.environ.get("MCP_URL", "http://127.0.0.1:9001/mcp")
     action = sys.argv[1] if len(sys.argv) > 1 else "list"
     asyncio.run(main(url, action, *sys.argv[2:]))

@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "openclaw-dispatcher": {
-      "url": "http://127.0.0.1:9000/mcp",
+      "url": "http://127.0.0.1:9001/mcp",
       "transport": "streamable-http",
       "headers": {}
     }

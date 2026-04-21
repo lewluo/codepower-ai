@@ -11,10 +11,11 @@
 xiaozhi-esp32-server(8000 / 8003)
    │  MCP streamable-http
    ▼
-dispatcher(127.0.0.1:9000)       ← 本仓库核心代码
+dispatcher(127.0.0.1:9001)       ← 本仓库核心代码
    │
-   ├── Hermes(主路,gpt-5.4 中转) ← 快,便宜
-   └── OpenClaw dispatch.sh(兜底,Claude -p) ← 复杂任务,贵
+   ├── Hermes / OpenClaw dispatch.sh
+   ├── 本机 Codex CLI / Claude Code CLI
+   └── JoyInside skill gateway(可选,127.0.0.1:9100)
 ```
 
 ---
@@ -134,7 +135,13 @@ python3 test_xiaozhi_ws.py "派 planner 用一句话总结今天最紧急的 3 �
 python3 -m http.server 8006 --directory \
   repo/main/xiaozhi-server/test &
 open http://localhost:8006/test_page.html
+# 本机浏览器测试:
 # 设置 → OTA 地址填: http://127.0.0.1:8003/xiaozhi/ota/
+#
+# 局域网硬件测试:
+# 设置 → OTA 地址填: http://你的宿主机局域网IP:8003/xiaozhi/ota/
+# data/.config.yaml 里的 server.websocket 保留“你的局域网IP”占位时,
+# OTA 会自动替换为当前宿主机局域网 IP。
 ```
 
 ---
@@ -216,7 +223,7 @@ OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色
 
 ## MCP 工具(dispatcher 暴露)
 
-`http://127.0.0.1:9000/mcp` 暴露 4 个工具:
+`http://127.0.0.1:9001/mcp` 暴露这些工具:
 
 | 工具 | 用途 | 调用路径 |
 |------|------|---------|
@@ -224,6 +231,9 @@ OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色
 | `dispatch_agent(agent_id, task)` | 派发任务 | Hermes 主路 → Claude 兜底 |
 | `query_agent_status()` | 查最近一次任务 | 读 `/tmp/xiaozhi-dispatcher-state.json` |
 | `read_daily_report(date)` | 读日报 | 读 `~/.openclaw/workspace/logs/daily/*.md` |
+| `hermes_repo_task(task)` | 让 Hermes 执行通用工程任务 | 默认 `~/Desktop/work_space/hemers_work_dir`，可用 `CODEPOWER_HERMES_WORKSPACE` 改 |
+| `run_codex(task, workdir, allow_edits)` | 调本机 Codex CLI | 默认只读，明确修改时才允许编辑 |
+| `run_claude_code(task, workdir, allow_edits)` | 调本机 Claude Code CLI | 默认只读，明确修改时才允许编辑 |
 
 想加新工具?在 `dispatcher/server.py` 加一个 `@mcp.tool()` 即可,小智会自动拿到。
 
@@ -239,10 +249,10 @@ xiaozhi-hackathon/
 ├── data/
 │   ├── .config.yaml.example      # 小智配置模板(进仓库)
 │   ├── .config.yaml              # 实际配置(含 api_key, .gitignore)
-│   └── .mcp_server_settings.json # MCP 接入点:指向 127.0.0.1:9000
+│   └── .mcp_server_settings.json # MCP 接入点:指向 127.0.0.1:9001
 ├── models/SenseVoiceSmall/       # ASR 模型(模型文件 .gitignore)
 ├── dispatcher/                   # 自研 MCP server
-│   ├── server.py                 # 4 个 MCP 工具
+│   ├── server.py                 # MCP 工具服务
 │   ├── test_client.py            # MCP client 测试
 │   ├── test_xiaozhi_ws.py        # WebSocket 端到端测试
 │   └── requirements.txt
@@ -262,10 +272,11 @@ xiaozhi-hackathon/
 ## 关键配置点(避坑)
 
 1. **LLM 必须支持 function calling** — 不支持的话工具不会被调。已验证 gpt-5.4(86gamestore)、deepseek-chat、openai gpt-4o 都支持。
-2. **`tool_call_timeout: 90`** — `.config.yaml` 里默认 90s。默认 30s 对 Hermes 不够(Hermes 冷启动 10s+)。
+2. **`tool_call_timeout: 300`** — `.config.yaml` 里默认 300s。默认 30s 对 Hermes / Codex / Claude Code 不够。
 3. **SOCKS 代理会干扰 httpx** — `start.sh` 已 unset 所有代理变量。如果你自己起 dispatcher,记得先 `unset ALL_PROXY HTTPS_PROXY HTTP_PROXY`。
 4. **首轮 MCP 竞态** — 改了 `core/connection.py` 7 行,见上面「修补小智源码」。
 5. **prompt 里必须列出工具名** — LLM 拿到 `tools=[...]` 但偶尔会幻觉"没这功能",所以在 system prompt 里明确罗列工具 + 路由规则,成功率接近 100%。
+6. **硬件局域网测试不需要公网隧道** — 同一 Wi-Fi 下优先用 `http://宿主机IP:8003/xiaozhi/ota/`。不要随手启动 `cloudflared tunnel --url ...`，它会把本机服务发布到公网入口。
 
 ---
 
