@@ -36,7 +36,7 @@ dispatcher(127.0.0.1:9000)       ← 本仓库核心代码
 
 当前这套仓库默认跑的是宿主机 Python 服务,不是 Docker 主流程:
 
-- `xiaozhi-server`: `127.0.0.1:8000` / `127.0.0.1:8003`
+- `xiaozhi-server`: `0.0.0.0:8000` / `0.0.0.0:8003`
 - `dispatcher`: `127.0.0.1:9000`
 - 测试页静态服务: `http://localhost:8006/test_page.html`
 
@@ -48,6 +48,7 @@ dispatcher(127.0.0.1:9000)       ← 本仓库核心代码
 - 测试页新增“接受 / 拒绝”按钮,进入待确认态时会高亮,并插入待确认卡片
 - Hermes 默认工作目录固定为 `/Users/carlos_chen/Desktop/work_space/hemers_work_dir`
 - Hermes 工具超时和小智 `tool_call_timeout` 已统一为 `300s`
+- `xiaozhi-server` 监听 `0.0.0.0`,同一局域网设备可通过宿主机 IP 访问 OTA
 
 适合的请求类型不只限写代码,也包括:
 
@@ -140,6 +141,14 @@ python3 -m http.server 8006 --directory repo/main/xiaozhi-server/test
 
 - `OTA服务器地址`: `http://127.0.0.1:8003/xiaozhi/ota/`
 - `WebSocket服务器地址`: 可留空,通常会由 OTA 自动回填
+
+如果要让同一 Wi-Fi 下的其它硬件访问:
+
+- 把 `server.ip` 设成 `0.0.0.0`
+- 把 `server.websocket` 和 `server.vision_explain` 保留为带“你的局域网IP”的占位格式
+- OTA 会自动按当前宿主机局域网 IP 下发 WebSocket 地址
+- 例如宿主机 IP 是 `192.168.1.6` 时,OTA 地址就是 `http://192.168.1.6:8003/xiaozhi/ota/`
+- 如果宿主机开着 VPN、代理或虚拟网卡,自动识别的 IP 可能不对,这时直接把 `server.websocket` 和 `server.vision_explain` 改成真实 Wi-Fi IP
 
 推荐直接测试这条最小闭环:
 

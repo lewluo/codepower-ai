@@ -7,9 +7,12 @@
 #   然后把下面的 YOUR_XXX 替换成你自己的 key
 
 server:
-  # 网页/设备连这个地址,换成宿主机局域网 IP 或 localhost
-  websocket: ws://127.0.0.1:8000/xiaozhi/v1/
-  vision_explain: http://127.0.0.1:8003/mcp/vision/explain
+  ip: 0.0.0.0
+  port: 8000
+  http_port: 8003
+  # 保留“你的”占位符时,OTA 会自动替换成当前宿主机的局域网 IP
+  websocket: ws://你的局域网IP:8000/xiaozhi/v1/
+  vision_explain: http://你的局域网IP:8003/mcp/vision/explain
 
 # MCP 工具调用的超时时间(秒) — dispatch_agent 走 Hermes 需要时间
 tool_call_timeout: 90
