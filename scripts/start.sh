@@ -7,6 +7,13 @@ XZ_DIR="$PROJECT_DIR/repo/main/xiaozhi-server"
 DISPATCHER_PORT="${DISPATCHER_PORT:-9001}"
 cd "$PROJECT_DIR"
 
+if [ -f "$PROJECT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/.env"
+  set +a
+fi
+
 echo "=== 1. 启动 MCP dispatcher (host:${DISPATCHER_PORT}) ==="
 if nc -z 127.0.0.1 "$DISPATCHER_PORT" 2>/dev/null; then
   echo "❌ 端口 ${DISPATCHER_PORT} 已被占用。请先停止占用进程,或用 DISPATCHER_PORT=xxxx 指定新端口。"

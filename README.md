@@ -68,18 +68,15 @@ cd xiaozhi-hackathon
 - 把 `data/.config.yaml` 和 `.mcp_server_settings.json` 软链到 xiaozhi-server 的 data 目录
 - 拷贝 `data/.config.yaml.example → data/.config.yaml`
 
-### 3. 填 LLM api_key
+### 3. 填环境变量
 
-编辑 `data/.config.yaml`,找到 `LLM.Gpt54LLM`:
+复制 `.env.example` 为本地 `.env`,填入实际密钥；`.env` 已被 `.gitignore` 忽略。
 
-```yaml
-LLM:
-  Gpt54LLM:
-    type: openai
-    model_name: gpt-5.4                       # 换成你的模型
-    base_url: https://api.86gamestore.com/v1  # 换成你的 base_url
-    api_key: YOUR_OPENAI_COMPATIBLE_API_KEY   # ⚠️ 必填
+```bash
+cp .env.example .env
 ```
+
+`data/.config.yaml` 支持 `${ENV_NAME}` 占位符，例如 `CODEPOWER_LLM_API_KEY`、`OPENAI_ASR_API_KEY`、`DOUBAO_TTS_APPID`、`DOUBAO_TTS_ACCESS_TOKEN`。
 
 **任何 OpenAI 兼容 + 支持 function_call 的接口都行**。比如:
 - [86gamestore](https://86gamestore.com) — 中转站,gpt/claude 都便宜

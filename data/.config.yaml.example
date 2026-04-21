@@ -4,7 +4,8 @@
 #
 # ⚠️ 使用前:
 #   cp data/.config.yaml.example data/.config.yaml
-#   然后把下面的 YOUR_XXX 替换成你自己的 key
+#   cp .env.example .env
+#   然后把 .env 里的变量替换成你自己的 key
 
 server:
   ip: 0.0.0.0
@@ -124,7 +125,7 @@ LLM:
     type: openai
     model_name: gpt-5.4                       # 换成你的模型名
     base_url: https://api.86gamestore.com/v1  # 换成你的 base_url
-    api_key: YOUR_OPENAI_COMPATIBLE_API_KEY   # ⚠️ 必须替换
+    api_key: ${CODEPOWER_LLM_API_KEY}         # ⚠️ 在 .env 里设置
     temperature: 0.3
     max_tokens: 800
 
@@ -138,8 +139,28 @@ Intent:
 # 不启用 manager-api(单模块部署,直接读本 config)
 # 不启用 mcp_endpoint(用 .mcp_server_settings.json 走 streamable-http 更简单)
 
-# TTS 用免费 EdgeTTS
+ASR:
+  OpenaiASR:
+    type: openai
+    api_key: ${OPENAI_ASR_API_KEY}
+    base_url: https://api.openai.com/v1/audio/transcriptions
+    model_name: gpt-4o-mini-transcribe
+    output_dir: tmp/
+
+# TTS 默认示例仍用免费 EdgeTTS；如需豆包，把 selected_module.TTS 改为 DoubaoTTS
 TTS:
+  DoubaoTTS:
+    type: doubao
+    api_url: https://openspeech.bytedance.com/api/v1/tts
+    voice: BV001_streaming
+    output_dir: tmp/
+    authorization: "Bearer;"
+    appid: ${DOUBAO_TTS_APPID}
+    access_token: ${DOUBAO_TTS_ACCESS_TOKEN}
+    cluster: volcano_tts
+    speed_ratio: 1.0
+    volume_ratio: 1.0
+    pitch_ratio: 1.0
   EdgeTTS:
     type: edge
     voice: zh-CN-XiaoxiaoNeural

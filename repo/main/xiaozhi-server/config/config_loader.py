@@ -1,7 +1,11 @@
 import os
+import re
 import yaml
 from collections.abc import Mapping
 from config.manage_api_client import init_service, get_server_config, get_agent_models
+
+
+ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
 
 
 def get_project_dir():
@@ -13,6 +17,30 @@ def read_config(config_path):
     with open(config_path, "r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
     return config
+
+
+def resolve_env_vars(value):
+    """Recursively resolve ${ENV_NAME} or ${ENV_NAME:-default} placeholders."""
+    if isinstance(value, str):
+        def replace(match):
+            env_name = match.group(1)
+            default = match.group(2)
+            env_value = os.environ.get(env_name)
+            if env_value is not None:
+                return env_value
+            if default is not None:
+                return default
+            return ""
+
+        return ENV_VAR_PATTERN.sub(replace, value)
+
+    if isinstance(value, list):
+        return [resolve_env_vars(item) for item in value]
+
+    if isinstance(value, Mapping):
+        return {key: resolve_env_vars(item) for key, item in value.items()}
+
+    return value
 
 
 def load_config():
@@ -45,6 +73,7 @@ def load_config():
     else:
         # 合并配置
         config = merge_configs(default_config, custom_config)
+    config = resolve_env_vars(config)
     # 初始化目录
     ensure_directories(config)
 
