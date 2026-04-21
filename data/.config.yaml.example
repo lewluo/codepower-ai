@@ -23,7 +23,7 @@ tool_call_timeout: 300
 selected_module:
   VAD: SileroVAD
   ASR: FunASR
-  LLM: Gpt54LLM        # 自定义,走 OpenAI 兼容中转
+  LLM: Gpt54LLM        # 可切成 JoyInsideLLM，走 JoyInside 文本智能体桥接
   TTS: EdgeTTS
   Memory: nomem
   Intent: function_call
@@ -128,6 +128,21 @@ LLM:
     api_key: ${CODEPOWER_LLM_API_KEY}         # ⚠️ 在 .env 里设置
     temperature: 0.3
     max_tokens: 800
+  JoyInsideLLM:
+    type: joyinside
+    access_key: ${JOYINSIDE_ACCESS_KEY}
+    secret_key: ${JOYINSIDE_SECRET_KEY}
+    vendor_id: ${JOYINSIDE_VENDOR_ID}
+    app_id: ${JOYINSIDE_APP_ID}
+    bot_id: ${JOYINSIDE_BOT_ID}
+    device_id: ${JOYINSIDE_DEVICE_ID}
+    device_name: ${JOYINSIDE_DEVICE_NAME}
+    uid: ${JOYINSIDE_UID:-codepower-local-user}
+    auth_url: https://api.joyinside.com/auth/getToken
+    register_url: https://api.joyinside.com/device/register
+    ws_url: wss://ws.joyinside.com/soulmate/voiceChat/v1
+    timeout: 20
+    max_wait_seconds: 60
 
 # 意图识别 — function_call 直接复用上面的 LLM
 Intent:
