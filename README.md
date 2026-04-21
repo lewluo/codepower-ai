@@ -15,7 +15,8 @@ dispatcher(127.0.0.1:9001)       ← 本仓库核心代码
    │
    ├── Hermes / OpenClaw dispatch.sh
    ├── 本机 Codex CLI / Claude Code CLI
-   └── JoyInside skill gateway(可选,127.0.0.1:9100)
+   ├── JoyInside voiceChat 出站能力(joyinside_chat)
+   └── JoyInside skill gateway 入站回调(可选,127.0.0.1:9100)
 ```
 
 ---
@@ -120,13 +121,14 @@ cd dispatcher
 source .venv/bin/activate
 
 # ① dispatcher 自身(不经过小智)
-python3 test_client.py list                                # 列出 4 个 MCP 工具
+python3 test_client.py list                                # 列出当前 MCP 工具
 python3 test_client.py call list_agents                    # 应返回 agent 列表
 
 # ② 端到端 WebSocket(模拟小智设备发文字)
 python3 test_xiaozhi_ws.py "列出所有可用的 agent"
 python3 test_xiaozhi_ws.py "读今天的日报"
 python3 test_xiaozhi_ws.py "派 planner 用一句话总结今天最紧急的 3 件事"
+python3 test_xiaozhi_ws.py "用 JoyInside 简短列出你能玩的能力"
 
 # ③ 真麦克风语音
 python3 -m http.server 8006 --directory \
@@ -140,6 +142,112 @@ open http://localhost:8006/test_page.html
 # data/.config.yaml 里的 server.websocket 保留“你的局域网IP”占位时,
 # OTA 会自动替换为当前宿主机局域网 IP。
 ```
+
+---
+
+## JoyInside 接入
+
+这里有两条链路,用途不同:
+
+1. **本地 LLM + JoyInside 能力**:小智仍用 `Gpt54LLM` 做主 LLM,需要陪伴、游戏、讲故事等能力时,通过 MCP 工具 `joyinside_chat` 调 JoyInside voiceChat。这是当前推荐模式,也就是"用自己的 LLM,独立调用 JoyInside 能力"。
+2. **JoyInside 云端回调 CodePower**:把本仓库的 `joyinside_gateway` 暴露成公网 HTTPS,让 JoyInside 平台里的自定义技能反过来调用 `list_agents`、`dispatch_agent`、`read_daily_report` 等本地工具。这条链路需要部署或 Cloudflare Tunnel。
+
+### 配置环境变量
+
+在 `.env` 里填 JoyInside 出站调用所需参数:
+
+```bash
+JOYINSIDE_ACCESS_KEY=
+JOYINSIDE_SECRET_KEY=
+JOYINSIDE_VENDOR_ID=
+JOYINSIDE_APP_ID=
+JOYINSIDE_DEVICE_ID=codepower-local-xiaozhi
+JOYINSIDE_DEVICE_NAME=CodePower-Local-Xiaozhi
+JOYINSIDE_BOT_ID=          # 可选;留空时会按 vendor/app/device 注册拿 botId
+JOYINSIDE_UID=codepower-local-user
+```
+
+保持 `data/.config.yaml`:
+
+```yaml
+selected_module:
+  LLM: Gpt54LLM
+  Intent: function_call
+```
+
+这时主 LLM 还是自己的 OpenAI 兼容模型。它会按 prompt 里的路由规则在用户说"用 JoyInside"、"玩游戏"、"讲故事"、"电子宠物"、"宝可梦"等场景调用 `joyinside_chat`。
+
+### 验证 JoyInside 出站能力
+
+先验证 dispatcher 直连:
+
+```bash
+cd dispatcher
+source .venv/bin/activate
+python3 test_client.py call joyinside_chat "请简短列出你能玩的能力"
+```
+
+再验证小智端到端链路:
+
+```bash
+python3 test_xiaozhi_ws.py "用 JoyInside 简短列出你能玩的能力"
+```
+
+调通的信号:
+
+- dispatcher 直连会返回 JoyInside 能力文本,例如游戏、故事、电子宠物等。
+- 小智日志里能看到调用工具 `joyinside_chat`。
+- 小智主链路日志仍显示自己的 LLM,例如 `llm成功 Gpt54LLM`,说明不是把整套主 LLM 切给 JoyInside。
+
+### 切成 JoyInside 当主 LLM
+
+如果要整套小智对话都走 JoyInside,把 `data/.config.yaml` 改成:
+
+```yaml
+selected_module:
+  LLM: JoyInsideLLM
+```
+
+这个模式会绕过本地 `Gpt54LLM` 的人设和工具路由,主回答来自 JoyInside 智能体。若 JoyInside 平台配置的人设没有生效,优先核对平台侧 app/bot/device 绑定、配置是否发布、`JOYINSIDE_APP_ID` 和 `JOYINSIDE_BOT_ID` 是否指向同一个已配置应用;本地 prompt 不会覆盖 JoyInside 平台的人设。
+
+### 暴露 CodePower 给 JoyInside 自定义技能
+
+`http://127.0.0.1:9100/joyinside/skill?tool=list_agents` 是给 JoyInside 平台调用的入站 HTTP/SSE 接口。本机 curl 能通,只代表 gateway 本地正常;JoyInside 云端要调用它,必须有公网 HTTPS。
+
+本地启动:
+
+```bash
+JOYINSIDE_SERVICE_TOKEN=dev-token ./scripts/start_joyinside_gateway.sh
+```
+
+本地测试:
+
+```bash
+curl -N -X POST 'http://127.0.0.1:9100/joyinside/skill?tool=list_agents' \
+  -H 'Authorization: Bearer dev-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"parameters":{"input":"列出所有可用 agent","session_id":"local","bot_id":"local"}}'
+```
+
+平台配置时,用 Cloudflare Tunnel 或正式部署把本地 9100 暴露成公网 HTTPS:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:9100
+```
+
+然后在 JoyInside 自定义技能里配置:
+
+- API URL: `https://<your-public-domain>/joyinside/skill?tool=list_agents`
+- Auth: Service Token
+- Token header: `Authorization: Bearer <JOYINSIDE_SERVICE_TOKEN>`
+- Response mode: streaming SSE,事件为 `Message` 和 `Done`
+
+可注册多个技能,只改 query 参数:
+
+- `tool=list_agents`
+- `tool=read_daily_report`
+- `tool=query_agent_status`
+- `tool=dispatch_agent`
 
 ---
 
@@ -275,6 +383,7 @@ xiaozhi-hackathon/
 4. **首轮 MCP 竞态** — 改了 `core/connection.py` 7 行,见上面「修补小智源码」。
 5. **prompt 里必须列出工具名** — LLM 拿到 `tools=[...]` 但偶尔会幻觉"没这功能",所以在 system prompt 里明确罗列工具 + 路由规则,成功率接近 100%。
 6. **硬件局域网测试不需要公网隧道** — 同一 Wi-Fi 下优先用 `http://宿主机IP:8003/xiaozhi/ota/`。不要随手启动 `cloudflared tunnel --url ...`，它会把本机服务发布到公网入口。
+7. **JoyInside 本地能力和公网技能不是一回事** — `joyinside_chat` 是本地出站调 JoyInside;`joyinside_gateway` 是 JoyInside 云端入站调本地 CodePower。只有后者需要公网 HTTPS。
 
 ---
 
