@@ -19,7 +19,7 @@ from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
 TAG = __name__
 DIRECT_HERMES_ALIAS_RE = re.compile(r"(hermes|hummus|赫尔墨斯|赫耳墨斯)", re.IGNORECASE)
 DIRECT_HERMES_REQUEST_RE = re.compile(
-    r"(让|叫|请让|请叫|交给|麻烦|帮我让|帮我叫|由).{0,8}(hermes|hummus|赫尔墨斯|赫耳墨斯)",
+    r"(用|让|叫|请让|请叫|交给|麻烦|帮我让|帮我叫|帮我用|由).{0,8}(hermes|hummus|赫尔墨斯|赫耳墨斯)",
     re.IGNORECASE,
 )
 

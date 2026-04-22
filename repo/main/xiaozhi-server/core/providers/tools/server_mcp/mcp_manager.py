@@ -3,6 +3,7 @@
 import asyncio
 import os
 import json
+from datetime import timedelta
 from typing import Dict, Any, List
 
 from mcp.types import LoggingMessageNotificationParams
@@ -53,8 +54,8 @@ class ServerMCPManager:
             # 初始化服务端MCP客户端
             logger.bind(tag=TAG).info(f"初始化服务端MCP客户端: {name}")
             client = ServerMCPClient(srv_config)
-            # 设置超时时间10秒
-            await asyncio.wait_for(client.initialize(logging_callback=self.logging_callback), timeout=10)
+            # 设置超时时间30秒（streamable-http 冷启动握手可能较慢）
+            await asyncio.wait_for(client.initialize(logging_callback=self.logging_callback), timeout=30)
 
             # 使用锁保护共享状态的修改
             async with self._init_lock:
@@ -98,6 +99,44 @@ class ServerMCPManager:
                 self.conn.func_handler.tool_manager.refresh_tools()
             self.conn.func_handler.current_support_functions()
 
+    async def ensure_connected(self) -> None:
+        """检查 MCP 连接状态，断线则尝试重连"""
+        if self.tools:
+            # 检查每个客户端是否还在线
+            all_ok = all(c.is_connected() for c in self.clients.values())
+            if all_ok:
+                return
+
+        config = self.load_config()
+        reconnect_tasks = []
+        for name, srv_config in config.items():
+            if not srv_config.get("command") and not srv_config.get("url"):
+                continue
+            client = self.clients.get(name)
+            if client and client.is_connected():
+                continue
+            # 清理旧客户端
+            if client:
+                try:
+                    await client.cleanup()
+                except Exception:
+                    pass
+                self.clients.pop(name, None)
+            logger.bind(tag=TAG).info(f"MCP 服务 {name} 断线，尝试重连")
+            reconnect_tasks.append(self._init_server(name, srv_config))
+
+        if reconnect_tasks:
+            await asyncio.gather(*reconnect_tasks)
+            # 重建工具列表
+            self.tools = []
+            for client in self.clients.values():
+                self.tools.extend(client.get_available_tools())
+            # 刷新缓存
+            if hasattr(self.conn, "func_handler") and self.conn.func_handler:
+                if hasattr(self.conn.func_handler, "tool_manager"):
+                    self.conn.func_handler.tool_manager.refresh_tools()
+                self.conn.func_handler.current_support_functions()
+
     def get_all_tools(self) -> List[Dict[str, Any]]:
         """获取所有服务的工具function定义"""
         return self.tools
@@ -134,7 +173,11 @@ class ServerMCPManager:
         # 带重试机制的工具调用
         for attempt in range(max_retries):
             try:
-                return await target_client.call_tool(tool_name, arguments, progress_callback=self.progress_callback)
+                return await target_client.call_tool(
+                    tool_name, arguments,
+                    read_timeout_seconds=timedelta(seconds=660),
+                    progress_callback=self.progress_callback,
+                )
             except Exception as e:
                 # 最后一次尝试失败时直接抛出异常
                 if attempt == max_retries - 1:

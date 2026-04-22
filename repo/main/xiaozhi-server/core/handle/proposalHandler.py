@@ -15,9 +15,19 @@ if TYPE_CHECKING:
 
 TAG = __name__
 
-# GPT 模式下所有工具调用都需要用户确认
+# 只读/查询类工具不需要用户确认，直接执行
+_READONLY_TOOLS = {
+    "query_agent_status",
+    "list_agents",
+    "read_daily_report",
+    "get_lunar",
+    "self_get_device_status",
+}
+
+
 def is_decision_tool(function_name: str) -> bool:
-    return True
+    """判断工具是否需要用户确认。只读查询类工具不需要。"""
+    return function_name not in _READONLY_TOOLS
 
 
 def _load_arguments(arguments: Any) -> Dict[str, Any]:
@@ -152,7 +162,12 @@ def _execute_tool_with_existing_pipeline(
     tool_input = _load_arguments(function_call_data.get("arguments"))
     enqueue_tool_report(conn, function_name, tool_input)
 
-    tool_call_timeout = int(conn.config.get("tool_call_timeout", 30))
+    tool_call_timeout = int(conn.config.get("tool_call_timeout", 600))
+
+    # 长任务先给用户一句语音反馈
+    display = _display_tool_name(function_name)
+    _speak_text(conn, f"好的，{display}开始执行，完成后告诉你结果。")
+
     try:
         result = asyncio.run_coroutine_threadsafe(
             conn.func_handler.handle_llm_function_call(conn, function_call_data),

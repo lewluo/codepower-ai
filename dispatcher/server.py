@@ -31,6 +31,7 @@ from typing import Optional
 
 import requests
 import websocket
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,9 @@ try:
     from powcoder_visual import state as visual_state
 except Exception:
     visual_state = None
+
+# 加载上级目录的 .env（所有 os.environ.get 之前）
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 HOME = Path.home()
 AGENTS_JSON = HOME / ".openclaw/lite/agents.json"
@@ -60,16 +64,18 @@ STATE_FILE = Path("/tmp/xiaozhi-dispatcher-state.json")
 RUNS_DIR = Path("/tmp/xiaozhi-dispatcher-runs")
 RUNS_DIR.mkdir(exist_ok=True)
 
-HERMES_TIMEOUT_SEC = 300         # 5 分钟
-HERMES_REPO_TIMEOUT_SEC = 300
-CLAUDE_FALLBACK_TIMEOUT_SEC = 120
-CODEX_TIMEOUT_SEC = 300
-CLAUDE_CODE_TIMEOUT_SEC = 300
+HERMES_TIMEOUT_SEC = 600         # 10 分钟
+HERMES_REPO_TIMEOUT_SEC = 600
+CLAUDE_FALLBACK_TIMEOUT_SEC = 300
+CODEX_TIMEOUT_SEC = 600
+CLAUDE_CODE_TIMEOUT_SEC = 600
 JOYINSIDE_TIMEOUT_SEC = 20
 JOYINSIDE_MAX_WAIT_SEC = 60
 
 # Resend Email
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "PowCoder")
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "hello@notify.powcoder.space")
 RESEND_CONTACTS_RAW = os.environ.get("RESEND_CONTACTS", "")
 RESEND_CONTACTS = {}
 for pair in RESEND_CONTACTS_RAW.split(","):
@@ -680,7 +686,7 @@ async def send_email(to: str, subject: str, body: str) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "from": "PowCoder <onboarding@resend.dev>",
+                "from": f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>",
                 "to": [email],
                 "subject": subject,
                 "text": body,
@@ -717,12 +723,60 @@ async def send_email(to: str, subject: str, body: str) -> str:
 
 
 @mcp.tool()
-async def query_agent_status() -> str:
-    """查询最近一次派发任务的执行状态。在用户问"刚才那个任务好了吗"时调用。"""
-    state = _load_state()
-    if not state:
+async def query_agent_status(tool: str = "", recent: int = 1) -> str:
+    """查询任务执行状态。
+
+    参数:
+      tool: 按工具类型筛选。可选值："hermes"、"claude"、"codex"、"dispatch"、"email"。
+            为空则不筛选。用户说"Hermes那个任务"时传 "hermes"，说"Claude Code的结果"传 "claude"。
+      recent: 返回最近几条记录，默认1条。用户说"最近的任务都有啥"时可设为3~5。
+
+    返回: 任务状态和结果摘要
+    """
+    # 工具类型 → run_id 前缀映射
+    tool_prefix = {
+        "hermes": "hermes_",
+        "claude": "claude_",
+        "codex": "codex_",
+        "dispatch": "run_",
+        "email": None,  # send_email 不生成 run 记录
+    }
+
+    # 读所有 run 记录，按时间倒序
+    runs = sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if not runs:
+        # 兜底读 state file
+        state = _load_state()
+        if state:
+            return _format_status(state)
         return "最近没有派发过任务。"
-    agent_id = state.get("agent_id", "?")
+
+    # 筛选
+    results = []
+    prefix = tool_prefix.get(tool, tool) if tool else ""
+    for run_file in runs:
+        if prefix and not run_file.stem.startswith(prefix):
+            continue
+        try:
+            state = json.loads(run_file.read_text())
+            results.append(_format_status(state))
+        except Exception:
+            continue
+        if len(results) >= recent:
+            break
+
+    if not results:
+        if tool:
+            return f"最近没有 {tool} 相关的任务记录。"
+        return "最近没有派发过任务。"
+
+    return "\n---\n".join(results)
+
+
+def _format_status(state: dict) -> str:
+    """格式化任务状态为可读文本"""
+    run_id = state.get("run_id", "?")
+    tool = state.get("tool") or state.get("agent_id") or "?"
     status = state.get("status", "?")
     task = state.get("task", "")[:80]
     backend = state.get("backend", "?")
@@ -733,13 +787,13 @@ async def query_agent_status() -> str:
             elapsed = int((datetime.now() - datetime.fromisoformat(started)).total_seconds())
         except Exception:
             elapsed = 0
-        return f"{agent_id} 正在执行 {task},已耗时 {elapsed} 秒"
+        return f"[{run_id}] {tool} 正在执行「{task}」，已耗时 {elapsed} 秒"
 
     if status == "success":
         result = state.get("result", "")
-        return f"{agent_id} 已完成(后端: {backend})。结果: {result[:400]}"
+        return f"[{run_id}] {tool} 已完成（后端: {backend}）。结果: {result[:400]}"
 
-    return f"{agent_id} 执行{status}:{state.get('result', '')[:400]}"
+    return f"[{run_id}] {tool} 执行{status}: {state.get('result', '')[:400]}"
 
 
 @mcp.tool()
@@ -792,6 +846,9 @@ async def run_codex(task: str, workdir: str = "", allow_edits: bool = False) -> 
         return f"工作目录不存在: {cwd}"
 
     run_id = f"codex_{int(time.time())}"
+    started = datetime.now().isoformat(timespec="seconds")
+    state = {"run_id": run_id, "tool": "run_codex", "task": task, "started": started, "status": "running", "backend": "codex", "workspace": str(cwd)}
+    _save_state(state)
     _visual_start_worker(
         kind="codex",
         task=task,
@@ -832,6 +889,11 @@ async def run_codex(task: str, workdir: str = "", allow_edits: bool = False) -> 
             output_path.unlink(missing_ok=True)
         except Exception:
             pass
+    finished = datetime.now().isoformat(timespec="seconds")
+    state.update({"finished": finished, "status": "success" if ok else "failed", "result": result[:4000]})
+    _save_state(state)
+    (RUNS_DIR / f"{run_id}.json").write_text(json.dumps(state, ensure_ascii=False, indent=2))
+
     prefix = "[Codex 已完成]" if ok else "[Codex 失败]"
     _visual_finish_worker(
         run_id=run_id,
@@ -843,13 +905,14 @@ async def run_codex(task: str, workdir: str = "", allow_edits: bool = False) -> 
 
 
 @mcp.tool()
-async def run_claude_code(task: str, workdir: str = "", allow_edits: bool = False) -> str:
+async def run_claude_code(task: str, workdir: str = "", allow_edits: bool = False, resume: bool = False) -> str:
     """调用本机 Claude Code 执行代码任务。默认只读分析；只有用户明确要求修改代码时才把 allow_edits 设为 true。
 
     参数:
       task: 交给 Claude Code 的自然语言任务
       workdir: 工作目录，默认使用 dispatcher 当前目录
       allow_edits: 是否允许 Claude Code 修改工作区。默认 false，只读。
+      resume: 是否继续上一次的会话。用户追问上次任务的结果、要求修改上次的产出、或说"继续""接着上次"时设为 true；全新任务设为 false。
 
     返回: Claude Code 最终输出摘要
     """
@@ -859,7 +922,10 @@ async def run_claude_code(task: str, workdir: str = "", allow_edits: bool = Fals
     if not cwd.exists():
         return f"工作目录不存在: {cwd}"
 
-    run_id = f"claude_code_{int(time.time())}"
+    run_id = f"claude_{int(time.time())}"
+    started = datetime.now().isoformat(timespec="seconds")
+    state = {"run_id": run_id, "tool": "run_claude_code", "task": task, "started": started, "status": "running", "backend": "claude_code", "workspace": str(cwd), "resume": resume}
+    _save_state(state)
     _visual_start_worker(
         kind="claude_code",
         task=task,
@@ -874,14 +940,20 @@ async def run_claude_code(task: str, workdir: str = "", allow_edits: bool = Fals
         task,
         "--output-format",
         "text",
-        "--no-session-persistence",
     ]
+    if resume:
+        cmd += ["--resume"]
     if allow_edits:
         cmd += ["--permission-mode", "acceptEdits"]
     else:
         cmd += ["--allowedTools", "Read,Grep,Glob,LS"]
 
     ok, result = await _run_command(cmd, CLAUDE_CODE_TIMEOUT_SEC, cwd)
+    finished = datetime.now().isoformat(timespec="seconds")
+    state.update({"finished": finished, "status": "success" if ok else "failed", "result": result[:4000]})
+    _save_state(state)
+    (RUNS_DIR / f"{run_id}.json").write_text(json.dumps(state, ensure_ascii=False, indent=2))
+
     prefix = "[Claude Code 已完成]" if ok else "[Claude Code 失败]"
     _visual_finish_worker(
         run_id=run_id,

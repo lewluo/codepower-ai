@@ -208,7 +208,7 @@ class ServerMCPClient:
                                 url=self.config["url"],
                                 headers=headers,
                                 timeout=self.config.get("timeout", 30),
-                                sse_read_timeout=self.config.get("sse_read_timeout", 60 * 5),
+                                sse_read_timeout=self.config.get("sse_read_timeout", 60 * 12),
                                 terminate_on_close=self.config.get("terminate_on_close", True)
                             )
                         )

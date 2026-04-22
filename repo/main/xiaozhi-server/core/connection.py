@@ -1050,6 +1050,26 @@ class ConnectionHandler:
                 _init_wait += 1
             functions = self.func_handler.get_functions()
 
+            # MCP 断线重连：如果只有内置工具（get_lunar、handle_exit_intent），尝试重连 dispatcher
+            if functions is not None and len(functions) <= 2:
+                mcp_executor = self.func_handler.server_mcp_executor
+                if mcp_executor and mcp_executor.mcp_manager:
+                    self.logger.bind(tag=TAG).warning(
+                        f"仅检测到 {len(functions)} 个工具，MCP 可能断线，尝试重连"
+                    )
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            mcp_executor.mcp_manager.ensure_connected(), self.loop
+                        )
+                        future.result(timeout=35)
+                        # 重连后重新获取工具列表
+                        functions = self.func_handler.get_functions()
+                        self.logger.bind(tag=TAG).info(
+                            f"MCP 重连后工具数量: {len(functions)}"
+                        )
+                    except Exception as e:
+                        self.logger.bind(tag=TAG).error(f"MCP 重连失败: {e}")
+
         # 长对话工具调用规则强化：动态生成基于当前可用工具的提醒
         tool_call_reminder = None
         if depth == 0 and query is not None and functions is not None:
@@ -1277,8 +1297,8 @@ class ConnectionHandler:
                     )
                     futures_with_data.append((future, tool_call_data, tool_input))
 
-                # 工具调用超时时间，可配置，默认30秒
-                tool_call_timeout = int(self.config.get("tool_call_timeout", 30))
+                # 工具调用超时时间，可配置，默认600秒（10分钟，适配长任务）
+                tool_call_timeout = int(self.config.get("tool_call_timeout", 600))
                 # 等待协程结束（实际等待时长为最慢的那个）
                 tool_results = []
 
