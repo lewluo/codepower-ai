@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>小智服务器测试页面</title>
-    <link rel="stylesheet" href="css/test_page.css?v=0421">
+    <link rel="stylesheet" href="css/test_page.css?v=0422">
     <script>
         // 检测是否使用file://协议打开
         if (window.location.protocol === 'file:') {
@@ -115,6 +115,21 @@
                         d="M6.62,10.79C8.06,13.62 10.38,15.94 13.21,17.38L15.41,15.18C15.69,14.9 16.08,14.82 16.43,14.93C17.55,15.3 18.75,15.5 20,15.5A1,1 0 0,1 21,16.5V20A1,1 0 0,1 20,21A17,17 0 0,1 3,4A1,1 0 0,1 4,3H7.5A1,1 0 0,1 8.5,4C8.5,5.25 8.7,6.45 9.07,7.57C9.18,7.92 9.1,8.31 8.82,8.59L6.62,10.79Z" />
                 </svg>
                 <span class="btn-text">拨号</span>
+            </button>
+
+            <!-- 模式切换按钮 -->
+            <button class="control-btn mode-btn mode-active" id="chatModeBtn" title="闲聊模式（JoyInside）">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20,2H4A2,2 0 0,0 2,4V22L6,18H20A2,2 0 0,0 22,16V4A2,2 0 0,0 20,2M20,16H6L4,18V4H20" />
+                </svg>
+                <span class="btn-text">闲聊</span>
+            </button>
+
+            <button class="control-btn mode-btn" id="taskModeBtn" title="任务模式（GPT）">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z" />
+                </svg>
+                <span class="btn-text">GPT</span>
             </button>
 
             <button class="control-btn" id="recordBtn" title="开始录音" disabled>
@@ -354,23 +369,23 @@
     </div>
 
     <!-- 背景加载 -->
-    <script src="js/ui/background-load.js?v=0421"></script>
+    <script src="js/ui/background-load.js?v=0422"></script>
 
     <!-- PIXI.js 2D渲染引擎 -->
-    <script src="js/live2d/pixi.js?v=0421"></script>
+    <script src="js/live2d/pixi.js?v=0422"></script>
 
     <!-- Live2D Cubism 4.0 SDK -->
-    <script src="js/live2d/live2dcubismcore.min.js?v=0421"></script>
-    <script src="js/live2d/cubism4.min.js?v=0421"></script>
+    <script src="js/live2d/live2dcubismcore.min.js?v=0422"></script>
+    <script src="js/live2d/cubism4.min.js?v=0422"></script>
 
     <!-- Live2D 管理器 -->
-    <script src="js/live2d/live2d.js?v=0421"></script>
+    <script src="js/live2d/live2d.js?v=0422"></script>
 
     <!-- Opus解码库 -->
-    <script src="js/utils/libopus.js?v=0421"></script>
+    <script src="js/utils/libopus.js?v=0422"></script>
 
     <!-- 主应用入口 -->
-    <script type="module" src="js/app.js?v=0421"></script>
+    <script type="module" src="js/app.js?v=0422"></script>
 
     <!-- 全局错误处理 -->
     <script>

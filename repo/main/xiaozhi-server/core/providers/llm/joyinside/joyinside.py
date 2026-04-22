@@ -27,6 +27,7 @@ class LLMProvider(LLMProviderBase):
         self.device_name = config.get("device_name", "CodePower-Local-Xiaozhi")
         self.device_model = config.get("device_model", "codepower-xiaozhi-bridge")
         self.uid = config.get("uid", "codepower-local-user")
+        self.system_prompt = config.get("system_prompt", "")
         self.auth_url = config.get("auth_url", "https://api.joyinside.com/auth/getToken")
         self.register_url = config.get(
             "register_url", "https://api.joyinside.com/device/register"
@@ -146,6 +147,9 @@ class LLMProvider(LLMProviderBase):
         query = self._last_user_text(dialogue)
         if not query:
             return
+        # 首轮注入 system prompt
+        if self.system_prompt:
+            query = f"[系统设定]{self.system_prompt}[/系统设定]\n\n用户说：{query}"
 
         try:
             bot_id = self._ensure_bot_id()

@@ -1,4 +1,4 @@
-import { log } from '../../utils/logger.js?v=0421';
+import { log } from '../../utils/logger.js?v=0422';
 
 
 // 检查Opus库是否已加载

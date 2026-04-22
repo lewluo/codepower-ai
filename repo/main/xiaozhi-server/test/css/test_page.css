@@ -451,6 +451,28 @@ body {
     background: rgba(237, 66, 69, 1);
 }
 
+/* 模式切换按钮样式 */
+.mode-btn {
+    border: 2px solid transparent;
+}
+
+.mode-btn.mode-active {
+    background: rgba(87, 196, 140, 0.9);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+.mode-btn.mode-active:hover {
+    background: rgba(87, 196, 140, 1);
+}
+
+#taskModeBtn.mode-active {
+    background: rgba(114, 137, 218, 0.9);
+}
+
+#taskModeBtn.mode-active:hover {
+    background: rgba(114, 137, 218, 1);
+}
+
 .control-btn.proposal-pending {
     background: rgba(255, 196, 87, 0.95);
     color: #2a2110;

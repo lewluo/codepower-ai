@@ -1,5 +1,5 @@
-import BlockingQueue from '../../utils/blocking-queue.js?v=0421';
-import { log } from '../../utils/logger.js?v=0421';
+import BlockingQueue from '../../utils/blocking-queue.js?v=0422';
+import { log } from '../../utils/logger.js?v=0422';
 
 // 音频流播放上下文类
 export class StreamingContext {

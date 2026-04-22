@@ -1,11 +1,11 @@
 // WebSocket消息处理模块
-import { getConfig, saveConnectionUrls } from '../../config/manager.js?v=0421';
-import { uiController } from '../../ui/controller.js?v=0421';
-import { log } from '../../utils/logger.js?v=0421';
-import { getAudioPlayer } from '../audio/player.js?v=0421';
-import { getAudioRecorder } from '../audio/recorder.js?v=0421';
-import { executeMcpTool, getMcpTools, setWebSocket as setMcpWebSocket } from '../mcp/tools.js?v=0421';
-import { webSocketConnect } from './ota-connector.js?v=0421';
+import { getConfig, saveConnectionUrls } from '../../config/manager.js?v=0422';
+import { uiController } from '../../ui/controller.js?v=0422';
+import { log } from '../../utils/logger.js?v=0422';
+import { getAudioPlayer } from '../audio/player.js?v=0422';
+import { getAudioRecorder } from '../audio/recorder.js?v=0422';
+import { executeMcpTool, getMcpTools, setWebSocket as setMcpWebSocket } from '../mcp/tools.js?v=0422';
+import { webSocketConnect } from './ota-connector.js?v=0422';
 
 // WebSocket处理器类
 export class WebSocketHandler {
@@ -19,6 +19,7 @@ export class WebSocketHandler {
         this.onProposalStateChange = null;
         this.currentSessionId = null;
         this.isRemoteSpeaking = false;
+        this.currentMode = 'chat'; // 'chat' = JoyInside闲聊, 'task' = GPT任务
     }
 
     // 发送hello握手消息
@@ -518,11 +519,12 @@ export class WebSocketHandler {
             const listenMessage = {
                 type: 'listen',
                 state: 'detect',
-                text: text
+                text: text,
+                mode: this.currentMode || 'chat'
             };
 
             this.websocket.send(JSON.stringify(listenMessage));
-            log(`发送文本消息: ${text}`, 'info');
+            log(`发送文本消息 [${listenMessage.mode}]: ${text}`, 'info');
 
             return true;
         } catch (error) {

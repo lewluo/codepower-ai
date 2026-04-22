@@ -174,6 +174,7 @@ class ConnectionHandler:
         # llm相关变量
         self.dialogue = Dialogue()
         self.pending_proposal = None
+        self.joyinside_llm = None  # 闲聊模式专用 LLM，延迟初始化
 
         # 工具调用统计（用于监控和自动恢复）
         self.tool_call_stats = {
@@ -860,7 +861,85 @@ class ConnectionHandler:
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
 
+    def _get_joyinside_llm(self):
+        """延迟初始化 JoyInside LLM 实例"""
+        if self.joyinside_llm is None:
+            ji_config = self.config.get("LLM", {}).get("JoyInsideLLM")
+            if ji_config:
+                from core.utils import llm as llm_utils
+                ji_type = ji_config.get("type", "joyinside")
+                self.joyinside_llm = llm_utils.create_instance(ji_type, ji_config)
+                self.logger.bind(tag=TAG).info("JoyInside LLM 已初始化（闲聊模式）")
+            else:
+                self.logger.bind(tag=TAG).warning("JoyInsideLLM 未配置，闲聊模式将回退到主 LLM")
+        return self.joyinside_llm
+
+    def _chat_joyinside(self, query):
+        """闲聊模式：直接走 JoyInside LLM，不做 function_call"""
+        current_sentence_id = str(uuid.uuid4().hex)
+        self.sentence_id = current_sentence_id
+        self.dialogue.put(Message(role="user", content=query))
+
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=current_sentence_id,
+                sentence_type=SentenceType.FIRST,
+                content_type=ContentType.ACTION,
+            )
+        )
+
+        ji_llm = self._get_joyinside_llm()
+        if ji_llm is None:
+            # 没配 JoyInside，回退到主 LLM
+            self.logger.bind(tag=TAG).warning("JoyInside 未配置，回退主 LLM")
+            return self.chat(query, depth=0)
+
+        self.logger.bind(tag=TAG).info(f"闲聊模式 → JoyInside: {query}")
+        response_message = []
+        try:
+            for token in ji_llm.response(self.session_id, self.dialogue.get_llm_dialogue()):
+                if self.client_abort:
+                    break
+                if token:
+                    response_message.append(token)
+                    self.tts.tts_text_queue.put(
+                        TTSMessageDTO(
+                            sentence_id=current_sentence_id,
+                            sentence_type=SentenceType.MIDDLE,
+                            content_type=ContentType.TEXT,
+                            content_detail=token,
+                        )
+                    )
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"JoyInside 对话失败: {e}")
+            self.tts.tts_text_queue.put(
+                TTSMessageDTO(
+                    sentence_id=current_sentence_id,
+                    sentence_type=SentenceType.MIDDLE,
+                    content_type=ContentType.TEXT,
+                    content_detail="JoyInside 暂时没接通，稍后再试。",
+                )
+            )
+
+        if response_message:
+            text_buff = "".join(response_message)
+            self.tts.store_tts_text(current_sentence_id, text_buff)
+            self.dialogue.put(Message(role="assistant", content=text_buff))
+
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=current_sentence_id,
+                sentence_type=SentenceType.LAST,
+                content_type=ContentType.ACTION,
+            )
+        )
+        return True
+
     def chat(self, query, depth=0):
+        # 闲聊模式：直接走 JoyInside，跳过 function_call 和工具链
+        if depth == 0 and query is not None and self.client_listen_mode == "chat":
+            return self._chat_joyinside(query)
+
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
         current_sentence_id = None
 

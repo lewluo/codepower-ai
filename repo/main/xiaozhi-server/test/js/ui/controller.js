@@ -1,8 +1,8 @@
 // UI controller module
-import { loadConfig, saveConfig } from '../config/manager.js?v=0421';
-import { getAudioPlayer } from '../core/audio/player.js?v=0421';
-import { getAudioRecorder } from '../core/audio/recorder.js?v=0421';
-import { getWebSocketHandler } from '../core/network/websocket.js?v=0421';
+import { loadConfig, saveConfig } from '../config/manager.js?v=0422';
+import { getAudioPlayer } from '../core/audio/player.js?v=0422';
+import { getAudioRecorder } from '../core/audio/recorder.js?v=0422';
+import { getWebSocketHandler } from '../core/network/websocket.js?v=0422';
 
 // UI controller class
 class UIController {
@@ -194,6 +194,32 @@ class UIController {
                         }
                     }
                 }, 300);
+            });
+        }
+
+        // Mode switch buttons
+        const chatModeBtn = document.getElementById('chatModeBtn');
+        const taskModeBtn = document.getElementById('taskModeBtn');
+        this.currentMode = 'chat'; // default mode
+
+        if (chatModeBtn) {
+            chatModeBtn.addEventListener('click', () => {
+                this.currentMode = 'chat';
+                chatModeBtn.classList.add('mode-active');
+                taskModeBtn.classList.remove('mode-active');
+                this.addChatMessage('已切换到闲聊模式（JoyInside）', false);
+                const wsHandler = getWebSocketHandler();
+                wsHandler.currentMode = 'chat';
+            });
+        }
+        if (taskModeBtn) {
+            taskModeBtn.addEventListener('click', () => {
+                this.currentMode = 'task';
+                taskModeBtn.classList.add('mode-active');
+                chatModeBtn.classList.remove('mode-active');
+                this.addChatMessage('已切换到任务模式（GPT）', false);
+                const wsHandler = getWebSocketHandler();
+                wsHandler.currentMode = 'task';
             });
         }
 
@@ -693,7 +719,7 @@ class UIController {
 
             if (isConnected) {
                 // Check microphone availability (check again after connection)
-                const { checkMicrophoneAvailability } = await import('../core/audio/recorder.js?v=0421');
+                const { checkMicrophoneAvailability } = await import('../core/audio/recorder.js?v=0422');
                 const micAvailable = await checkMicrophoneAvailability();
 
                 if (!micAvailable) {

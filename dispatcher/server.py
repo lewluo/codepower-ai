@@ -50,7 +50,7 @@ STATE_FILE = Path("/tmp/xiaozhi-dispatcher-state.json")
 RUNS_DIR = Path("/tmp/xiaozhi-dispatcher-runs")
 RUNS_DIR.mkdir(exist_ok=True)
 
-HERMES_TIMEOUT_SEC = 45          # 语音场景下不要太长,保证"声音在说"的体感
+HERMES_TIMEOUT_SEC = 300         # 5 分钟
 HERMES_REPO_TIMEOUT_SEC = 300
 CLAUDE_FALLBACK_TIMEOUT_SEC = 120
 CODEX_TIMEOUT_SEC = 180
@@ -513,24 +513,8 @@ async def hermes_repo_task(task: str) -> str:
     return f"[Hermes 失败] {result[:500]}"
 
 
-@mcp.tool()
-async def joyinside_chat(input: str, session_id: str = "codepower-tool") -> str:
-    """调用 JoyInside 智能体的文本对话能力。
-
-    适用场景:
-      - 用户明确说"用 JoyInside"、"调用 JoyInside"
-      - 玩游戏、讲故事、电子宠物、宝可梦、小马宝莉等 JoyInside bot 支持的陪伴/互动能力
-
-    参数:
-      input: 交给 JoyInside 智能体的原始用户请求
-      session_id: 可选会话 ID，相同 ID 可维持 JoyInside 多轮上下文
-
-    返回: JoyInside 智能体返回的文本
-    """
-    try:
-        return await asyncio.to_thread(_joyinside_chat_sync, input, session_id)
-    except Exception as e:
-        return f"[JoyInside 失败] {type(e).__name__}: {e}"
+# joyinside_chat 工具已移至 xiaozhi-server 的 JoyInsideLLM provider（闲聊模式）
+# 不再通过 MCP dispatcher 调用
 
 
 @mcp.tool()

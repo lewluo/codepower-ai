@@ -1,7 +1,7 @@
 // Audio recording module
-import { log } from '../../utils/logger.js?v=0421';
-import { initOpusEncoder } from './opus-codec.js?v=0421';
-import { getAudioPlayer } from './player.js?v=0421';
+import { log } from '../../utils/logger.js?v=0422';
+import { initOpusEncoder } from './opus-codec.js?v=0422';
+import { getAudioPlayer } from './player.js?v=0422';
 
 // Audio recorder class
 export class AudioRecorder {
@@ -204,7 +204,7 @@ export class AudioRecorder {
         if (this.isRecording) return false;
         try {
             // Check if WebSocketHandler instance exists
-            const { getWebSocketHandler } = await import('../network/websocket.js?v=0421');
+            const { getWebSocketHandler } = await import('../network/websocket.js?v=0422');
             const wsHandler = getWebSocketHandler();
             // If machine is speaking, send abort message
             if (wsHandler && wsHandler.isRemoteSpeaking && wsHandler.currentSessionId) {
@@ -243,9 +243,13 @@ export class AudioRecorder {
             if (this.audioProcessorType === 'worklet' && this.audioProcessor.port) {
                 this.audioProcessor.port.postMessage({ command: 'start' });
             }
-            // Send listening start message
+            // Send listening start message with current mode
             if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                log(`已发送录音开始消息`, 'info');
+                const { getWebSocketHandler } = await import('../network/websocket.js?v=0422');
+                const currentMode = getWebSocketHandler().currentMode || 'chat';
+                const listenStart = JSON.stringify({ type: 'listen', state: 'start', mode: currentMode });
+                this.websocket.send(listenStart);
+                log(`已发送录音开始消息 [mode=${currentMode}]`, 'info');
             } else {
                 log('WebSocket未连接，无法发送开始消息', 'error');
                 return false;

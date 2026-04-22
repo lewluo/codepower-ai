@@ -48,6 +48,10 @@ async def handle_user_intent(conn: "ConnectionHandler", text):
     if await checkWakeupWords(conn, filtered_text):
         return True
 
+    # 闲聊模式下跳过工具相关的意图识别，直接进入 chat() 走 JoyInside
+    if conn.client_listen_mode == "chat":
+        return False
+
     if await try_handle_direct_hermes_request(conn, text):
         return True
 
