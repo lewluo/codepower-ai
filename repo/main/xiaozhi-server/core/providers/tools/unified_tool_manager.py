@@ -1,5 +1,6 @@
 """统一工具管理器"""
 
+import re
 from typing import Dict, List, Optional, Any
 from config.logger import setup_logging
 from plugins_func.register import Action, ActionResponse
@@ -59,15 +60,35 @@ class ToolManager:
         self._cached_function_descriptions = descriptions
         return descriptions
 
+    @staticmethod
+    def _tool_name_key(tool_name: str) -> str:
+        """Build a forgiving lookup key for model-emitted tool names."""
+        return re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]", "", tool_name or "").lower()
+
+    def resolve_tool_name(self, tool_name: str) -> str:
+        """Resolve exact or punctuation-stripped aliases to a registered tool."""
+        tools = self.get_all_tools()
+        if tool_name in tools:
+            return tool_name
+
+        target_key = self._tool_name_key(tool_name)
+        if not target_key:
+            return tool_name
+
+        for candidate in tools:
+            if self._tool_name_key(candidate) == target_key:
+                return candidate
+        return tool_name
+
     def has_tool(self, tool_name: str) -> bool:
         """检查是否存在指定工具"""
         tools = self.get_all_tools()
-        return tool_name in tools
+        return self.resolve_tool_name(tool_name) in tools
 
     def get_tool_type(self, tool_name: str) -> Optional[ToolType]:
         """获取工具类型"""
         tools = self.get_all_tools()
-        tool_def = tools.get(tool_name)
+        tool_def = tools.get(self.resolve_tool_name(tool_name))
         return tool_def.tool_type if tool_def else None
 
     async def execute_tool(
@@ -75,8 +96,9 @@ class ToolManager:
     ) -> ActionResponse:
         """执行工具调用"""
         try:
+            actual_tool_name = self.resolve_tool_name(tool_name)
             # 查找工具类型
-            tool_type = self.get_tool_type(tool_name)
+            tool_type = self.get_tool_type(actual_tool_name)
             if not tool_type:
                 return ActionResponse(
                     action=Action.NOTFOUND,
@@ -92,8 +114,10 @@ class ToolManager:
                 )
 
             # 执行工具
-            self.logger.info(f"执行工具: {tool_name}，参数: {arguments}")
-            result = await executor.execute(self.conn, tool_name, arguments)
+            if actual_tool_name != tool_name:
+                self.logger.info(f"工具名已归一化: {tool_name} -> {actual_tool_name}")
+            self.logger.info(f"执行工具: {actual_tool_name}，参数: {arguments}")
+            result = await executor.execute(self.conn, actual_tool_name, arguments)
             self.logger.debug(f"工具执行结果: {result}")
             return result
 

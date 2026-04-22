@@ -1,6 +1,7 @@
 import json
 import uuid
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, Dict
 
 from core.handle.sendAudioHandle import send_proposal_message
@@ -146,6 +147,7 @@ def _execute_tool_with_existing_pipeline(
     conn: "ConnectionHandler",
     function_call_data: Dict[str, Any],
 ):
+    _wait_for_tool_ready(conn, function_call_data.get("name"))
     function_name = function_call_data["name"]
     tool_input = _load_arguments(function_call_data.get("arguments"))
     enqueue_tool_report(conn, function_name, tool_input)
@@ -172,6 +174,36 @@ def _execute_tool_with_existing_pipeline(
         report_tool_call=False,
     )
     conn._handle_function_result([(result, function_call_data)], depth=0)
+
+
+def _wait_for_tool_ready(
+    conn: "ConnectionHandler",
+    function_name: str | None,
+    timeout_seconds: float = 10.0,
+) -> None:
+    if not function_name or not getattr(conn, "func_handler", None):
+        return
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        handler = conn.func_handler
+        if getattr(handler, "finish_init", False):
+            tool_manager = getattr(handler, "tool_manager", None)
+            if tool_manager and hasattr(tool_manager, "resolve_tool_name"):
+                resolved = tool_manager.resolve_tool_name(function_name)
+                if resolved != function_name:
+                    function_name = resolved
+            if handler.has_tool(function_name):
+                return
+        time.sleep(0.1)
+
+    try:
+        supported = conn.func_handler.current_support_functions()
+    except Exception:
+        supported = []
+    conn.logger.bind(tag=TAG).warning(
+        f"确认后工具仍未就绪: {function_name}, supported={supported}"
+    )
 
 
 async def accept_pending_proposal(conn: "ConnectionHandler") -> None:

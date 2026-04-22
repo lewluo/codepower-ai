@@ -9,12 +9,21 @@ from core.utils import textUtils
 from core.utils.util import audio_to_data
 from core.providers.tts.dto.dto import SentenceType
 from core.utils.audioRateController import AudioRateController
+from core.utils.powcoder_visual_state import call as visual_state_call
 
 TAG = __name__
 # 音频帧时长（毫秒）
 AUDIO_FRAME_DURATION = 60
 # 预缓冲包数量，直接发送以减少延迟
 PRE_BUFFER_COUNT = 5
+
+
+def _listen_mode(conn: "ConnectionHandler") -> str:
+    return getattr(conn, "client_listen_mode", "auto") or "auto"
+
+
+def _visual_provider(mode: str) -> str:
+    return "JoyInside" if mode == "chat" else "PowCoder"
 
 
 async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text, sentence_id=None):
@@ -270,6 +279,26 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
     message = {"type": "tts", "state": state, "session_id": conn.session_id}
     if text is not None:
         message["text"] = textUtils.check_emoji(text)
+        if state == "sentence_start":
+            mode = _listen_mode(conn)
+            if mode == "task":
+                visual_state_call(
+                    "write_state_patch",
+                    {
+                        "active_conversation_id": conn.session_id,
+                        "last_assistant_text": message["text"],
+                    },
+                )
+            else:
+                visual_state_call(
+                    "update_conversation",
+                    conn.session_id,
+                    mode=mode,
+                    assistant_text=message["text"],
+                    status="idle",
+                    provider=_visual_provider(mode),
+                    create_session=True,
+                )
 
     # TTS播放结束
     if state == "stop":
@@ -322,6 +351,25 @@ async def send_stt_message(conn: "ConnectionHandler", text):
         # 如果不是JSON格式，直接使用原始文本
         display_text = text
     stt_text = textUtils.get_string_no_punctuation_or_emoji(display_text)
+    mode = _listen_mode(conn)
+    if mode == "task":
+        visual_state_call(
+            "write_state_patch",
+            {
+                "active_conversation_id": conn.session_id,
+                "last_user_text": stt_text,
+            },
+        )
+    else:
+        visual_state_call(
+            "update_conversation",
+            conn.session_id,
+            mode=mode,
+            user_text=stt_text,
+            status="serving",
+            provider=_visual_provider(mode),
+            create_session=True,
+        )
     await conn.websocket.send(
         json.dumps({"type": "stt", "text": stt_text, "session_id": conn.session_id})
     )
@@ -349,4 +397,13 @@ async def send_proposal_message(conn: "ConnectionHandler", state: str, payload=N
     }
     if payload:
         message.update(payload)
+    payload = payload or {}
+    visual_state_call(
+        "set_proposal",
+        conversation_id=conn.session_id,
+        state_name=state,
+        function_name=payload.get("function_name") or "",
+        task=payload.get("task") or "",
+        proposal_text=payload.get("proposal_text") or "",
+    )
     await conn.websocket.send(json.dumps(message))

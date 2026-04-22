@@ -43,6 +43,7 @@ from core.utils.prompt_manager import PromptManager
 from core.utils.voiceprint_provider import VoiceprintProvider
 from core.utils.util import get_system_error_response
 from core.utils import textUtils
+from core.utils.powcoder_visual_state import call as visual_state_call
 
 
 TAG = __name__
@@ -240,6 +241,13 @@ class ConnectionHandler:
             self.conn_from_mqtt_gateway = request_path.endswith("?from=mqtt_gateway")
             if self.conn_from_mqtt_gateway:
                 self.logger.bind(tag=TAG).info("连接来自:MQTT网关")
+            visual_state_call(
+                "set_connection",
+                conversation_id=self.session_id,
+                device_id=self.device_id or "",
+                source="mqtt" if self.conn_from_mqtt_gateway else "browser",
+                status="connected",
+            )
 
             # 初始化活动时间戳
             self.first_activity_time = time.time() * 1000
@@ -895,7 +903,10 @@ class ConnectionHandler:
             return self.chat(query, depth=0)
 
         self.logger.bind(tag=TAG).info(f"闲聊模式 → JoyInside: {query}")
+        visual_state_call("start_chat", self.session_id, query, provider="JoyInside")
         response_message = []
+        visual_status = "idle"
+        visual_text = ""
         try:
             for token in ji_llm.response(self.session_id, self.dialogue.get_llm_dialogue()):
                 if self.client_abort:
@@ -912,6 +923,8 @@ class ConnectionHandler:
                     )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"JoyInside 对话失败: {e}")
+            visual_status = "failed"
+            visual_text = "JoyInside 暂时没接通，稍后再试。"
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=current_sentence_id,
@@ -923,8 +936,16 @@ class ConnectionHandler:
 
         if response_message:
             text_buff = "".join(response_message)
+            visual_text = text_buff
             self.tts.store_tts_text(current_sentence_id, text_buff)
             self.dialogue.put(Message(role="assistant", content=text_buff))
+        visual_state_call(
+            "finish_chat",
+            self.session_id,
+            visual_text,
+            status=visual_status,
+            provider="JoyInside",
+        )
 
         self.tts.tts_text_queue.put(
             TTSMessageDTO(
@@ -945,6 +966,12 @@ class ConnectionHandler:
 
         if query is not None:
             self.logger.bind(tag=TAG).info(f"大模型收到用户消息: {query}")
+            if depth == 0:
+                visual_state_call(
+                    "set_mode",
+                    self.session_id,
+                    self.client_listen_mode or "task",
+                )
 
         # 为最顶层时新建会话ID和发送FIRST请求
         if depth == 0:
@@ -1448,6 +1475,13 @@ class ConnectionHandler:
     async def close(self, ws=None):
         """资源清理方法"""
         try:
+            visual_state_call(
+                "set_connection",
+                conversation_id=self.session_id,
+                device_id=self.device_id or "",
+                source="mqtt" if self.conn_from_mqtt_gateway else "browser",
+                status="offline",
+            )
             # 清理 VAD 连接资源
             if (
                     hasattr(self, "vad")

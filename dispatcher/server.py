@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -31,6 +32,15 @@ from typing import Optional
 import requests
 import websocket
 from mcp.server.fastmcp import FastMCP
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from powcoder_visual import state as visual_state
+except Exception:
+    visual_state = None
 
 HOME = Path.home()
 AGENTS_JSON = HOME / ".openclaw/lite/agents.json"
@@ -120,12 +130,31 @@ def _load_state() -> dict:
         return {}
 
 
+def _visual_start_worker(**kwargs) -> None:
+    if visual_state is None:
+        return
+    try:
+        visual_state.start_worker(**kwargs)
+    except Exception as e:
+        print(f"[visual_state] start_worker failed: {type(e).__name__}: {e}")
+
+
+def _visual_finish_worker(**kwargs) -> None:
+    if visual_state is None:
+        return
+    try:
+        visual_state.finish_worker(**kwargs)
+    except Exception as e:
+        print(f"[visual_state] finish_worker failed: {type(e).__name__}: {e}")
+
+
 async def _run_hermes(
     task_prompt: str, timeout: int, cwd: Optional[Path] = None
 ) -> tuple[bool, str]:
     """调 Hermes 非交互模式,返回 (成功, 结果文本)"""
     if not HERMES.exists():
         return False, "Hermes 未安装"
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             str(HERMES), "chat",
@@ -140,7 +169,9 @@ async def _run_hermes(
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         text = out.decode("utf-8", errors="replace").strip()
         if proc.returncode != 0:
-            return False, f"Hermes exit={proc.returncode}: {err.decode('utf-8', errors='replace')[:500]}"
+            err_text = err.decode("utf-8", errors="replace").strip()
+            detail = err_text or text or "no stderr/stdout"
+            return False, f"Hermes exit={proc.returncode}: {detail[:500]}"
         if not text:
             return False, "Hermes 返回为空"
         # 清理 Hermes 非内容行(session_id、空行等),语音场景不需要
@@ -152,6 +183,13 @@ async def _run_hermes(
         except Exception:
             pass
         return False, f"Hermes 超时 ({timeout}s)"
+    except asyncio.CancelledError:
+        try:
+            if proc and proc.returncode is None:
+                proc.kill()
+        except Exception:
+            pass
+        raise
     except Exception as e:
         return False, f"Hermes 异常: {type(e).__name__}: {e}"
 
@@ -433,18 +471,61 @@ async def dispatch_agent(agent_id: str, task: str) -> str:
     _save_state(state)
 
     # 主路: Hermes
+    hermes_worker_id = f"dispatch_{agent_id}_hermes"
+    _visual_start_worker(
+        kind="hermes",
+        task=task,
+        run_id=f"{run_id}_hermes",
+        worker_id=hermes_worker_id,
+        display_name=f"Hermes {agent_id}",
+        agent_id=agent_id,
+    )
     ok, result = await _run_hermes(full_prompt, HERMES_TIMEOUT_SEC)
     backend_used = "hermes"
 
     if not ok:
+        _visual_finish_worker(
+            run_id=f"{run_id}_hermes",
+            worker_id=hermes_worker_id,
+            status="failed",
+            result=result,
+        )
         # 兜底: Claude via OpenClaw
+        claude_worker_id = f"dispatch_{agent_id}_claude"
+        _visual_start_worker(
+            kind="openclaw",
+            task=task,
+            run_id=f"{run_id}_claude",
+            worker_id=claude_worker_id,
+            display_name=f"OpenClaw {agent_id}",
+            agent_id=agent_id,
+        )
         ok2, result2 = await _run_claude_dispatch(agent_id, task, CLAUDE_FALLBACK_TIMEOUT_SEC)
         if ok2:
             result = result2
             ok = True
             backend_used = "claude"
+            _visual_finish_worker(
+                run_id=f"{run_id}_claude",
+                worker_id=claude_worker_id,
+                status="success",
+                result=result,
+            )
         else:
             result = f"主路 Hermes 失败: {result}\n兜底 Claude 也失败: {result2}"
+            _visual_finish_worker(
+                run_id=f"{run_id}_claude",
+                worker_id=claude_worker_id,
+                status="failed",
+                result=result2,
+            )
+    else:
+        _visual_finish_worker(
+            run_id=f"{run_id}_hermes",
+            worker_id=hermes_worker_id,
+            status="success",
+            result=result,
+        )
 
     finished = datetime.now().isoformat(timespec="seconds")
     state.update({
@@ -501,10 +582,21 @@ async def hermes_repo_task(task: str) -> str:
         "workspace": str(WORKSPACE_DIR),
     }
     _save_state(state)
-
-    ok, result = await _run_hermes(
-        full_prompt, HERMES_REPO_TIMEOUT_SEC, cwd=WORKSPACE_DIR
+    _visual_start_worker(
+        kind="hermes",
+        task=task,
+        run_id=run_id,
+        worker_id="hermes_repo",
+        display_name="Hermes repo",
+        workspace=str(WORKSPACE_DIR),
     )
+
+    try:
+        ok, result = await _run_hermes(
+            full_prompt, HERMES_REPO_TIMEOUT_SEC, cwd=WORKSPACE_DIR
+        )
+    except asyncio.CancelledError:
+        ok, result = False, "Hermes 调用被上游连接取消"
     finished = datetime.now().isoformat(timespec="seconds")
     state.update(
         {
@@ -514,6 +606,12 @@ async def hermes_repo_task(task: str) -> str:
         }
     )
     _save_state(state)
+    _visual_finish_worker(
+        run_id=run_id,
+        worker_id="hermes_repo",
+        status="success" if ok else "failed",
+        result=result,
+    )
     (RUNS_DIR / f"{run_id}.json").write_text(
         json.dumps(state, ensure_ascii=False, indent=2)
     )
@@ -538,7 +636,21 @@ async def send_email(to: str, subject: str, body: str) -> str:
 
     返回: 发送结果
     """
+    run_id = f"email_{int(time.time())}"
+    _visual_start_worker(
+        kind="email",
+        task=f"send email to {to}: {subject}",
+        run_id=run_id,
+        worker_id="send_email",
+        display_name="Email",
+    )
     if not RESEND_API_KEY:
+        _visual_finish_worker(
+            run_id=run_id,
+            worker_id="send_email",
+            status="failed",
+            result="Resend API Key 未配置，无法发送邮件。",
+        )
         return "Resend API Key 未配置，无法发送邮件。"
 
     # 匹配联系人
@@ -551,7 +663,14 @@ async def send_email(to: str, subject: str, body: str) -> str:
                 break
     if not email:
         available = "、".join(RESEND_CONTACTS.keys()) or "无"
-        return f"找不到联系人「{to}」。已绑定的联系人：{available}"
+        result = f"找不到联系人「{to}」。已绑定的联系人：{available}"
+        _visual_finish_worker(
+            run_id=run_id,
+            worker_id="send_email",
+            status="failed",
+            result=result,
+        )
+        return result
 
     try:
         resp = requests.post(
@@ -569,11 +688,32 @@ async def send_email(to: str, subject: str, body: str) -> str:
             timeout=15,
         )
         if resp.status_code in (200, 201):
-            return f"邮件已发送给{to}（{email}），主题：{subject}"
+            result = f"邮件已发送给{to}（{email}），主题：{subject}"
+            _visual_finish_worker(
+                run_id=run_id,
+                worker_id="send_email",
+                status="success",
+                result=result,
+            )
+            return result
         else:
-            return f"邮件发送失败：{resp.status_code} {resp.text[:200]}"
+            result = f"邮件发送失败：{resp.status_code} {resp.text[:200]}"
+            _visual_finish_worker(
+                run_id=run_id,
+                worker_id="send_email",
+                status="failed",
+                result=result,
+            )
+            return result
     except Exception as e:
-        return f"邮件发送异常：{type(e).__name__}: {e}"
+        result = f"邮件发送异常：{type(e).__name__}: {e}"
+        _visual_finish_worker(
+            run_id=run_id,
+            worker_id="send_email",
+            status="failed",
+            result=result,
+        )
+        return result
 
 
 @mcp.tool()
@@ -651,6 +791,15 @@ async def run_codex(task: str, workdir: str = "", allow_edits: bool = False) -> 
     if not cwd.exists():
         return f"工作目录不存在: {cwd}"
 
+    run_id = f"codex_{int(time.time())}"
+    _visual_start_worker(
+        kind="codex",
+        task=task,
+        run_id=run_id,
+        worker_id="codex",
+        display_name="Codex",
+        workspace=str(cwd),
+    )
     with tempfile.NamedTemporaryFile(prefix="codex-last-", suffix=".txt", delete=False) as tmp:
         output_path = Path(tmp.name)
     try:
@@ -684,6 +833,12 @@ async def run_codex(task: str, workdir: str = "", allow_edits: bool = False) -> 
         except Exception:
             pass
     prefix = "[Codex 已完成]" if ok else "[Codex 失败]"
+    _visual_finish_worker(
+        run_id=run_id,
+        worker_id="codex",
+        status="success" if ok else "failed",
+        result=result,
+    )
     return f"{prefix} {result[:2000]}"
 
 
@@ -704,6 +859,15 @@ async def run_claude_code(task: str, workdir: str = "", allow_edits: bool = Fals
     if not cwd.exists():
         return f"工作目录不存在: {cwd}"
 
+    run_id = f"claude_code_{int(time.time())}"
+    _visual_start_worker(
+        kind="claude_code",
+        task=task,
+        run_id=run_id,
+        worker_id="claude_code",
+        display_name="Claude Code",
+        workspace=str(cwd),
+    )
     cmd = [
         CLAUDE,
         "-p",
@@ -719,6 +883,12 @@ async def run_claude_code(task: str, workdir: str = "", allow_edits: bool = Fals
 
     ok, result = await _run_command(cmd, CLAUDE_CODE_TIMEOUT_SEC, cwd)
     prefix = "[Claude Code 已完成]" if ok else "[Claude Code 失败]"
+    _visual_finish_worker(
+        run_id=run_id,
+        worker_id="claude_code",
+        status="success" if ok else "failed",
+        result=result,
+    )
     return f"{prefix} {result[:2000]}"
 
 

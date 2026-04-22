@@ -10,6 +10,7 @@ from core.handle.reportHandle import enqueue_asr_report
 from core.handle.sendAudioHandle import send_stt_message, send_tts_message
 from core.handle.textMessageHandler import TextMessageHandler
 from core.handle.textMessageType import TextMessageType
+from core.utils.powcoder_visual_state import call as visual_state_call
 from core.utils.util import remove_punctuation_and_length
 from core.providers.asr.dto.dto import InterfaceType
 
@@ -28,6 +29,7 @@ class ListenTextMessageHandler(TextMessageHandler):
             conn.logger.bind(tag=TAG).debug(
                 f"客户端拾音模式：{conn.client_listen_mode}"
             )
+            visual_state_call("set_mode", conn.session_id, conn.client_listen_mode)
         if msg_json["state"] == "start":
             # 设备从播放模式切回录音模式,清除所有音频状态和缓冲区
             conn.reset_audio_states()

@@ -15,7 +15,7 @@ dispatcher(127.0.0.1:9001)       ← 本仓库核心代码
    │
    ├── Hermes / OpenClaw dispatch.sh
    ├── 本机 Codex CLI / Claude Code CLI
-   ├── JoyInside voiceChat 出站能力(joyinside_chat)
+   ├── xiaozhi chat 模式直连 JoyInside voiceChat
    └── JoyInside skill gateway 入站回调(可选,127.0.0.1:9100)
 ```
 
@@ -128,7 +128,8 @@ python3 test_client.py call list_agents                    # 应返回 agent 列
 python3 test_xiaozhi_ws.py "列出所有可用的 agent"
 python3 test_xiaozhi_ws.py "读今天的日报"
 python3 test_xiaozhi_ws.py "派 planner 用一句话总结今天最紧急的 3 件事"
-python3 test_xiaozhi_ws.py "用 JoyInside 简短列出你能玩的能力"
+python3 test_xiaozhi_ws.py "讲个很短的故事" chat
+python3 test_xiaozhi_ws.py "让 Hermes 只回复 OK" task --accept
 
 # ③ 真麦克风语音
 python3 -m http.server 8006 --directory \
@@ -149,7 +150,7 @@ open http://localhost:8006/test_page.html
 
 这里有两条链路,用途不同:
 
-1. **本地 LLM + JoyInside 能力**:小智仍用 `Gpt54LLM` 做主 LLM,需要陪伴、游戏、讲故事等能力时,通过 MCP 工具 `joyinside_chat` 调 JoyInside voiceChat。这是当前推荐模式,也就是"用自己的 LLM,独立调用 JoyInside 能力"。
+1. **模式分流**:task 模式继续用自己的 `Gpt54LLM` 做 function calling,负责 Hermes、Codex、Claude Code、分身派发等任务;chat 模式在 xiaozhi-server 内直连 `JoyInsideLLM`,负责陪伴、游戏、讲故事、电子宠物等互动能力。
 2. **JoyInside 云端回调 CodePower**:把本仓库的 `joyinside_gateway` 暴露成公网 HTTPS,让 JoyInside 平台里的自定义技能反过来调用 `list_agents`、`dispatch_agent`、`read_daily_report` 等本地工具。这条链路需要部署或 Cloudflare Tunnel。
 
 ### 配置环境变量
@@ -175,29 +176,23 @@ selected_module:
   Intent: function_call
 ```
 
-这时主 LLM 还是自己的 OpenAI 兼容模型。它会按 prompt 里的路由规则在用户说"用 JoyInside"、"玩游戏"、"讲故事"、"电子宠物"、"宝可梦"等场景调用 `joyinside_chat`。
+这时 task 模式主 LLM 还是自己的 OpenAI 兼容模型。需要 JoyInside 的讲故事、游戏、电子宠物等能力时,用 chat 模式发送消息。
 
 ### 验证 JoyInside 出站能力
 
-先验证 dispatcher 直连:
+验证小智端到端链路:
 
 ```bash
 cd dispatcher
 source .venv/bin/activate
-python3 test_client.py call joyinside_chat "请简短列出你能玩的能力"
-```
-
-再验证小智端到端链路:
-
-```bash
-python3 test_xiaozhi_ws.py "用 JoyInside 简短列出你能玩的能力"
+python3 test_xiaozhi_ws.py "讲个很短的故事" chat
 ```
 
 调通的信号:
 
-- dispatcher 直连会返回 JoyInside 能力文本,例如游戏、故事、电子宠物等。
-- 小智日志里能看到调用工具 `joyinside_chat`。
-- 小智主链路日志仍显示自己的 LLM,例如 `llm成功 Gpt54LLM`,说明不是把整套主 LLM 切给 JoyInside。
+- 终端能收到 JoyInside 返回的故事、游戏、电子宠物等互动内容。
+- 小智日志里能看到 `闲聊模式 → JoyInside`。
+- task 模式日志仍显示自己的 LLM,例如 `llm成功 Gpt54LLM`,说明任务链路没有切给 JoyInside。
 
 ### 切成 JoyInside 当主 LLM
 
@@ -336,7 +331,6 @@ OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色
 | `dispatch_agent(agent_id, task)` | 派发任务 | Hermes 主路 → Claude 兜底 |
 | `query_agent_status()` | 查最近一次任务 | 读 `/tmp/xiaozhi-dispatcher-state.json` |
 | `read_daily_report(date)` | 读日报 | 读 `~/.openclaw/workspace/logs/daily/*.md` |
-| `joyinside_chat(input, session_id)` | 调 JoyInside 智能体 | JoyInside token → voiceChat WebSocket |
 | `hermes_repo_task(task)` | 让 Hermes 执行通用工程任务 | 默认 `~/Desktop/work_space/hemers_work_dir`，可用 `CODEPOWER_HERMES_WORKSPACE` 改 |
 | `run_codex(task, workdir, allow_edits)` | 调本机 Codex CLI | 默认只读，明确修改时才允许编辑 |
 | `run_claude_code(task, workdir, allow_edits)` | 调本机 Claude Code CLI | 默认只读，明确修改时才允许编辑 |
@@ -383,7 +377,7 @@ xiaozhi-hackathon/
 4. **首轮 MCP 竞态** — 改了 `core/connection.py` 7 行,见上面「修补小智源码」。
 5. **prompt 里必须列出工具名** — LLM 拿到 `tools=[...]` 但偶尔会幻觉"没这功能",所以在 system prompt 里明确罗列工具 + 路由规则,成功率接近 100%。
 6. **硬件局域网测试不需要公网隧道** — 同一 Wi-Fi 下优先用 `http://宿主机IP:8003/xiaozhi/ota/`。不要随手启动 `cloudflared tunnel --url ...`，它会把本机服务发布到公网入口。
-7. **JoyInside 本地能力和公网技能不是一回事** — `joyinside_chat` 是本地出站调 JoyInside;`joyinside_gateway` 是 JoyInside 云端入站调本地 CodePower。只有后者需要公网 HTTPS。
+7. **JoyInside 本地能力和公网技能不是一回事** — chat 模式是本地出站调 JoyInside;`joyinside_gateway` 是 JoyInside 云端入站调本地 CodePower。只有后者需要公网 HTTPS。
 
 ---
 

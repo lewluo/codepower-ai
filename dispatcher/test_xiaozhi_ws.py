@@ -6,6 +6,8 @@
   python3 test_xiaozhi_ws.py "列出所有 agent"
   python3 test_xiaozhi_ws.py "让 planner 看看今天有什么任务"
   python3 test_xiaozhi_ws.py "读今天的日报"
+  python3 test_xiaozhi_ws.py "讲个很短的故事" chat
+  python3 test_xiaozhi_ws.py "让 Hermes 只回复 OK" task --accept
 """
 from __future__ import annotations
 
@@ -19,7 +21,12 @@ import websockets
 WS_URL = "ws://127.0.0.1:8000/xiaozhi/v1/"
 
 
-async def send_text(query: str, total_timeout: float = 90.0) -> None:
+async def send_text(
+    query: str,
+    mode: str = "chat",
+    decision: str = "",
+    total_timeout: float = 120.0,
+) -> None:
     device_id = f"aa:bb:cc:{uuid.uuid4().hex[:6]}"
     headers = {
         "device-id": device_id,
@@ -45,9 +52,9 @@ async def send_text(query: str, total_timeout: float = 90.0) -> None:
         welcome = await asyncio.wait_for(ws.recv(), timeout=10)
         print(f"[←] welcome: {welcome[:200]}")
 
-        detect = {"type": "listen", "state": "detect", "text": query}
+        detect = {"type": "listen", "state": "detect", "text": query, "mode": mode}
         await ws.send(json.dumps(detect))
-        print(f"[→] listen/detect: {query}")
+        print(f"[→] listen/detect[{mode}]: {query}")
 
         llm_pieces: list[str] = []
         end = asyncio.get_event_loop().time() + total_timeout
@@ -92,6 +99,13 @@ async def send_text(query: str, total_timeout: float = 90.0) -> None:
                         pass
                     break
             else:
+                if mtype == "proposal":
+                    state = obj.get("state")
+                    print(f"[← proposal/{state}] {json.dumps(obj, ensure_ascii=False)[:300]}")
+                    if state == "pending" and decision in {"accept", "reject"}:
+                        await ws.send(json.dumps({"type": decision}))
+                        print(f"[→] {decision}")
+                    continue
                 print(f"[← {mtype}] {json.dumps(obj, ensure_ascii=False)[:200]}")
 
         print("---")
@@ -100,4 +114,10 @@ async def send_text(query: str, total_timeout: float = 90.0) -> None:
 
 if __name__ == "__main__":
     query = sys.argv[1] if len(sys.argv) > 1 else "你好,你是谁?"
-    asyncio.run(send_text(query))
+    mode = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else "chat"
+    decision = ""
+    if "--accept" in sys.argv:
+        decision = "accept"
+    elif "--reject" in sys.argv:
+        decision = "reject"
+    asyncio.run(send_text(query, mode=mode, decision=decision))

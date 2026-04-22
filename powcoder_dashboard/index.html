@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PowCoder</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>PowCoder</h1>
+        <p class="topbar-meta">
+          <span id="connectionText" role="status" aria-live="polite">离线</span>
+          <span id="updatedText">--</span>
+        </p>
+      </div>
+      <div class="mode-switch" aria-label="current mode">
+        <span id="modeDot" class="mode-dot"></span>
+        <span id="modeText">idle</span>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="session-panel">
+        <div class="panel-title">session history</div>
+        <div id="sessionList" class="session-list"></div>
+      </aside>
+
+      <section class="stage">
+        <div class="stage-head">
+          <h2 id="stageTitle">等待连接</h2>
+          <p id="stageSubtitle">PowCoder visual service</p>
+        </div>
+
+        <div id="proposalPanel" class="proposal-panel is-hidden">
+          <div class="proposal-label">待确认</div>
+          <div id="proposalText" class="proposal-text"></div>
+          <div id="proposalTask" class="proposal-task"></div>
+        </div>
+
+        <div class="stage-grid">
+          <article id="chatCard" class="worker-card joyinside">
+            <div class="card-handle"></div>
+            <div id="chatTitle" class="card-title">JoyInside</div>
+            <div id="chatStatus" class="card-state">idle</div>
+            <p id="chatSummary">暂无闲聊</p>
+          </article>
+
+          <div id="activeWorkers" class="active-workers"></div>
+        </div>
+      </section>
+
+      <aside class="worker-panel">
+        <div class="panel-title">workers</div>
+        <div id="workerPool" class="worker-list"></div>
+      </aside>
+    </section>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
