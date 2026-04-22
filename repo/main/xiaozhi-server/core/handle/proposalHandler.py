@@ -14,11 +14,9 @@ if TYPE_CHECKING:
 
 TAG = __name__
 
-DECISION_TOOL_NAMES = {"hermes_repo_task"}
-
-
+# GPT 模式下所有工具调用都需要用户确认
 def is_decision_tool(function_name: str) -> bool:
-    return function_name in DECISION_TOOL_NAMES
+    return True
 
 
 def _load_arguments(arguments: Any) -> Dict[str, Any]:
@@ -38,17 +36,28 @@ def _dump_arguments(arguments: Any) -> str:
     return json.dumps(arguments or {}, ensure_ascii=False)
 
 
+_TOOL_DISPLAY = {
+    "hermes_repo_task": "Hermes",
+    "dispatch_agent": "分身派发",
+    "list_agents": "查看分身",
+    "query_agent_status": "查询进度",
+    "read_daily_report": "读日报",
+    "run_codex": "Codex",
+    "run_claude_code": "Claude Code",
+    "send_email": "发送邮件",
+}
+
+
 def _build_proposal_text(function_name: str, arguments: Dict[str, Any]) -> str:
-    if function_name == "hermes_repo_task":
-        task = arguments.get("task") or "未提供任务"
-        return f"我建议让 Hermes 直接在当前工作目录处理这件事：{task}。采纳还是拒绝呢？"
-    return "这个操作需要你先确认。采纳还是拒绝呢？"
+    display = _TOOL_DISPLAY.get(function_name, function_name)
+    task = arguments.get("task") or arguments.get("input") or arguments.get("date") or ""
+    if task:
+        return f"方案：用{display}处理「{task}」。采纳还是拒绝？"
+    return f"方案：调用{display}。采纳还是拒绝？"
 
 
 def _display_tool_name(function_name: str | None) -> str:
-    if function_name == "hermes_repo_task":
-        return "Hermes处理"
-    return "待确认操作"
+    return _TOOL_DISPLAY.get(function_name, function_name or "待确认操作")
 
 
 async def stage_pending_proposal(

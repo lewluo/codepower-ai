@@ -232,22 +232,22 @@ class UIController {
                     clearTimeout(recordTimer);
                     recordTimer = null;
                 }
-                recordTimer = setTimeout(() => {
+                recordTimer = setTimeout(async () => {
                     const audioRecorder = getAudioRecorder();
                     if (audioRecorder.isRecording) {
                         audioRecorder.stop();
-                        // Restore record button to normal state
                         recordBtn.classList.remove('recording');
                         recordBtn.querySelector('.btn-text').textContent = '录音';
                     } else {
-                        // Update button state to recording
                         recordBtn.classList.add('recording');
                         recordBtn.querySelector('.btn-text').textContent = '录音中';
-
-                        // Start recording, update button state after delay
-                        setTimeout(() => {
-                            audioRecorder.start();
-                        }, 100);
+                        try {
+                            await audioRecorder.start();
+                        } catch (e) {
+                            console.error('录音启动失败:', e);
+                            recordBtn.classList.remove('recording');
+                            recordBtn.querySelector('.btn-text').textContent = '录音';
+                        }
                     }
                 }, 300);
             });

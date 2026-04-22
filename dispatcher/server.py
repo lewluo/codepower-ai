@@ -53,10 +53,20 @@ RUNS_DIR.mkdir(exist_ok=True)
 HERMES_TIMEOUT_SEC = 300         # 5 分钟
 HERMES_REPO_TIMEOUT_SEC = 300
 CLAUDE_FALLBACK_TIMEOUT_SEC = 120
-CODEX_TIMEOUT_SEC = 180
-CLAUDE_CODE_TIMEOUT_SEC = 180
+CODEX_TIMEOUT_SEC = 300
+CLAUDE_CODE_TIMEOUT_SEC = 300
 JOYINSIDE_TIMEOUT_SEC = 20
 JOYINSIDE_MAX_WAIT_SEC = 60
+
+# Resend Email
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_CONTACTS_RAW = os.environ.get("RESEND_CONTACTS", "")
+RESEND_CONTACTS = {}
+for pair in RESEND_CONTACTS_RAW.split(","):
+    pair = pair.strip()
+    if ":" in pair:
+        name, email = pair.split(":", 1)
+        RESEND_CONTACTS[name.strip()] = email.strip()
 
 JOYINSIDE_AUTH_URL = os.environ.get(
     "JOYINSIDE_AUTH_URL", "https://api.joyinside.com/auth/getToken"
@@ -515,6 +525,55 @@ async def hermes_repo_task(task: str) -> str:
 
 # joyinside_chat 工具已移至 xiaozhi-server 的 JoyInsideLLM provider（闲聊模式）
 # 不再通过 MCP dispatcher 调用
+
+
+@mcp.tool()
+async def send_email(to: str, subject: str, body: str) -> str:
+    """给预置联系人发送邮件。GPT 负责起草邮件标题和正文。
+
+    参数:
+      to: 联系人名字（如"罗总""黄老师"），会自动匹配邮箱地址
+      subject: 邮件标题
+      body: 邮件正文
+
+    返回: 发送结果
+    """
+    if not RESEND_API_KEY:
+        return "Resend API Key 未配置，无法发送邮件。"
+
+    # 匹配联系人
+    email = RESEND_CONTACTS.get(to)
+    if not email:
+        # 模糊匹配
+        for name, addr in RESEND_CONTACTS.items():
+            if to in name or name in to:
+                email = addr
+                break
+    if not email:
+        available = "、".join(RESEND_CONTACTS.keys()) or "无"
+        return f"找不到联系人「{to}」。已绑定的联系人：{available}"
+
+    try:
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": "PowCoder <onboarding@resend.dev>",
+                "to": [email],
+                "subject": subject,
+                "text": body,
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            return f"邮件已发送给{to}（{email}），主题：{subject}"
+        else:
+            return f"邮件发送失败：{resp.status_code} {resp.text[:200]}"
+    except Exception as e:
+        return f"邮件发送异常：{type(e).__name__}: {e}"
 
 
 @mcp.tool()
