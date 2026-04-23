@@ -1,63 +1,159 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PowCoder</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PowCoder · 终端工作展示页</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <main class="app-shell">
+  <div class="page-shell">
     <header class="topbar">
-      <div>
-        <h1>PowCoder</h1>
-        <p class="topbar-meta">
-          <span id="connectionText" role="status" aria-live="polite">离线</span>
-          <span id="updatedText">--</span>
-        </p>
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">△</div>
+        <div>
+          <div class="brand-name">POWCODER</div>
+          <div class="brand-sub">AI Agent 终端工作展示页</div>
+        </div>
       </div>
-      <div class="mode-switch" aria-label="current mode">
-        <span id="modeDot" class="mode-dot"></span>
-        <span id="modeText">idle</span>
+      <div class="topbar-right">
+        <div id="connectionPill" class="status-pill offline">
+          <span class="dot"></span>
+          <span id="connectionText" role="status" aria-live="polite">离线</span>
+        </div>
+        <div class="mode-toggle" role="tablist" aria-label="mode toggle">
+          <button id="autoModeBtn" class="mode-btn active" type="button" data-mode-view="auto">auto</button>
+          <button id="manualModeBtn" class="mode-btn" type="button" data-mode-view="manual">manual</button>
+        </div>
       </div>
     </header>
 
-    <section class="workspace">
-      <aside class="session-panel">
-        <div class="panel-title">session history</div>
-        <div id="sessionList" class="session-list"></div>
-      </aside>
-
-      <section class="stage">
-        <div class="stage-head">
-          <h2 id="stageTitle">等待连接</h2>
-          <p id="stageSubtitle">PowCoder visual service</p>
+    <main>
+      <section class="hero-section panel soft-panel">
+        <div class="hero-copy">
+          <div class="eyebrow">powcoder.space · <span id="updatedText">等待状态同步</span></div>
+          <h1>灵感，不用等。<br>终端，正在<strong>工作</strong>。</h1>
+          <p id="heroDesc" class="hero-desc">
+            PowCoder 是一款面向 Web 4.0 时代的 AI Agent 终端。
+            页面聚焦展示设备在线状态、语音对话、终端输出与 Agent 协作效果。
+          </p>
+          <div class="tag-row" aria-label="runtime tags">
+            <span id="modeTag" class="tag">mode: idle</span>
+            <span id="providerTag" class="tag">provider: PowCoder</span>
+            <span id="taskTag" class="tag">task: idle</span>
+          </div>
+          <div class="hero-actions">
+            <button id="startDemoBtn" class="primary-btn" type="button">开始演示</button>
+            <button id="runSummaryBtn" class="ghost-btn" type="button">运行总结任务</button>
+          </div>
         </div>
-
-        <div id="proposalPanel" class="proposal-panel is-hidden">
-          <div class="proposal-label">待确认</div>
-          <div id="proposalText" class="proposal-text"></div>
-          <div id="proposalTask" class="proposal-task"></div>
-        </div>
-
-        <div class="stage-grid">
-          <article id="chatCard" class="worker-card joyinside">
-            <div class="card-handle"></div>
-            <div id="chatTitle" class="card-title">JoyInside</div>
-            <div id="chatStatus" class="card-state">idle</div>
-            <p id="chatSummary">暂无闲聊</p>
-          </article>
-
-          <div id="activeWorkers" class="active-workers"></div>
+        <div class="hero-device-wrap">
+          <img src="./assets/images/device-hero.png" alt="PowCoder 设备" class="hero-device">
         </div>
       </section>
 
-      <aside class="worker-panel">
-        <div class="panel-title">workers</div>
-        <div id="workerPool" class="worker-list"></div>
-      </aside>
-    </section>
-  </main>
+      <section class="workspace-grid panel soft-panel">
+        <div class="section-head three-col-head">
+          <div>
+            <h2>终端工作展示</h2>
+            <p>终端、Agent、语音对话和工作链路已接入本地 PowCoder visual service 状态。</p>
+          </div>
+          <div class="quick-actions">
+            <button class="small-btn" id="clearLogBtn" type="button">清空终端</button>
+            <button class="small-btn" id="randomTaskBtn" type="button">随机任务</button>
+          </div>
+        </div>
+
+        <div class="grid-3">
+          <section class="card terminal-card dark-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title light">实时终端</div>
+                <div class="card-sub light">展示设备接入、识别、调度、执行与回复链路</div>
+              </div>
+              <div id="terminalStatus" class="status-pill subtle-dark"><span class="dot"></span>在线</div>
+            </div>
+            <div id="terminalLog" class="terminal-log" aria-live="polite"></div>
+          </section>
+
+          <section id="voiceCard" class="card voice-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">语音对话</div>
+                <div class="card-sub">展示用户输入、模型回复与执行反馈</div>
+              </div>
+              <div class="timer" id="voiceTimer">00:00</div>
+            </div>
+            <div class="wave-wrap" aria-hidden="true">
+              <div class="wave-bars">
+                <span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span>
+              </div>
+            </div>
+            <div class="voice-status">
+              <span class="record-dot"></span>
+              <span id="voiceStatusText">等待输入</span>
+            </div>
+            <div id="proposalPanel" class="proposal-strip is-hidden">
+              <div class="proposal-label">待确认</div>
+              <div id="proposalText" class="proposal-text"></div>
+              <div id="proposalTask" class="proposal-task"></div>
+            </div>
+            <div id="chatList" class="chat-list"></div>
+            <div class="preset-row">
+              <button class="preset-btn" type="button" data-command="帮我总结今天的项目进度">项目进度总结</button>
+              <button class="preset-btn" type="button" data-command="生成一份前端页面优化建议">前端优化建议</button>
+              <button class="preset-btn" type="button" data-command="切换到 Visual Service 并生成可视化摘要">可视化摘要</button>
+            </div>
+          </section>
+
+          <section class="card agents-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">当前 Agent</div>
+                <div class="card-sub">真实状态优先；未接入的角色保留原型交互</div>
+              </div>
+              <button id="focusActiveAgentBtn" class="link-btn" type="button">查看全部</button>
+            </div>
+            <div id="agentGrid" class="agent-grid"></div>
+          </section>
+        </div>
+
+        <section class="workflow card workflow-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">工作链路</div>
+              <div class="card-sub">语音输入 → 本地服务 → dispatcher → Agent 执行 → 结果返回</div>
+            </div>
+          </div>
+          <div id="workflowSteps" class="workflow-steps"></div>
+        </section>
+      </section>
+
+      <section class="resource-section panel soft-panel">
+        <div class="section-head">
+          <div>
+            <h2>Session 与状态数据</h2>
+            <p>左侧为最近对话与任务；右侧列出当前页面已经接入的本地接口。</p>
+          </div>
+        </div>
+        <div class="resource-grid">
+          <div id="sessionList" class="session-list"></div>
+          <div class="resource-box">
+            <ul>
+              <li>主状态接口：<code>/api/state</code></li>
+              <li>事件流接口：<code>/api/events</code></li>
+              <li>Session 接口：<code>/api/sessions</code></li>
+              <li>设备主视觉资源：<code>assets/images/device-hero.png</code></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
   <script type="module" src="./app.js"></script>
 </body>
 </html>
