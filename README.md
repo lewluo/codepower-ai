@@ -16,7 +16,8 @@ dispatcher(127.0.0.1:9001)       ← 本仓库核心代码
    ├── Hermes / OpenClaw dispatch.sh
    ├── 本机 Codex CLI / Claude Code CLI
    ├── xiaozhi chat 模式直连 JoyInside voiceChat
-   └── JoyInside skill gateway 入站回调(可选,127.0.0.1:9100)
+   ├── JoyInside skill gateway 入站回调(可选,127.0.0.1:9100)
+   └── PowCoder visual dashboard(127.0.0.1:9200)
 ```
 
 ---
@@ -143,6 +144,58 @@ open http://localhost:8006/test_page.html
 # data/.config.yaml 里的 server.websocket 保留“你的局域网IP”占位时,
 # OTA 会自动替换为当前宿主机局域网 IP。
 ```
+
+### 7. PowCoder 可视化状态页
+
+可视化页用于演示和调试小智 / JoyInside / dispatcher / Agent 的联动状态。它不是独立聊天入口,而是读取 PowCoder 写入的状态文件和事件流,实时展示:
+
+- 设备连接状态、当前 `chat/task/auto` 模式
+- 语音对话输入与模型回复
+- dispatcher proposal 待确认 / 已采纳 / 已拒绝状态
+- Hermes、OpenClaw、Codex、Claude Code 等 worker 运行状态
+- 最近 session 和任务链路
+
+启动可视化服务:
+
+```bash
+./scripts/start_powcoder_visual.sh
+open http://127.0.0.1:9200/
+```
+
+可视化服务会暴露这些本地接口:
+
+```text
+GET /api/state     # 当前聚合状态
+GET /api/events    # 最近事件日志
+GET /api/sessions  # 最近 session 列表
+```
+
+联动测试方式:
+
+```bash
+# 先启动主服务
+./scripts/start.sh
+
+# 再启动可视化页
+./scripts/start_powcoder_visual.sh
+
+# 浏览器测试页,底部可切换“闲聊 / GPT”
+python3 -m http.server 8006 --directory repo/main/xiaozhi-server/test
+open http://127.0.0.1:8006/test_page.html
+```
+
+在小智测试页发送消息后,`http://127.0.0.1:9200/` 会同步刷新终端日志、语音对话、Agent 卡片和工作链路。也可以用命令行直接打端到端链路:
+
+```bash
+cd dispatcher
+source .venv/bin/activate
+python3 test_xiaozhi_ws.py "讲个很短的故事" chat
+python3 test_xiaozhi_ws.py "让 Hermes 只回复 OK" task --accept
+```
+
+演示截图:
+
+![PowCoder 可视化状态页](docs/images/powcoder-visual-dashboard.png)
 
 ---
 
