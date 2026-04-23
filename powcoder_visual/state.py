@@ -519,7 +519,6 @@ def finish_worker(
     result: str = "",
     worker_id: str | None = None,
 ) -> None:
-    active_task_id = read_state().get("active_task_id") or run_id
     result_preview = (result or "")[:500]
     with _locked():
         state = read_state()
@@ -553,11 +552,12 @@ def finish_worker(
                 "result_preview": result_preview,
             }
             workers.append(worker_payload)
-        if active_task_id:
+        task_id = worker_payload.get("task_id") or run_id
+        if task_id:
             _upsert_session(
                 state,
                 {
-                    "session_id": active_task_id,
+                    "session_id": task_id,
                     "type": "task",
                     "status": "success" if status == "success" else status,
                 },
@@ -567,7 +567,7 @@ def finish_worker(
     append_event(
         f"worker.{status}",
         worker_payload,
-        task_id=active_task_id,
+        task_id=task_id,
     )
 
 
