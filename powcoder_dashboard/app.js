@@ -73,7 +73,8 @@ const demoPresets = {
 const defaultAgents = [
   { id: 'joyinside', name: 'JoyInside', icon: '☺', color: '#5d89ff', desc: '闲聊、语音互动与陪伴式回复' },
   { id: 'dispatcher', name: 'Dispatcher', icon: '⟲', color: '#7d67f7', desc: '任务分发、确认和工具路由' },
-  { id: 'hermes', name: 'Hermes / OpenClaw', icon: '∞', color: '#111111', desc: '本地工程任务与多 Agent 执行' },
+  { id: 'openclaw', name: 'OpenClaw', icon: '⌁', color: '#1f6feb', desc: '本机 OpenClaw Gateway 与 MCP 能力' },
+  { id: 'hermes', name: 'Hermes', icon: '∞', color: '#111111', desc: '独立 Hermes 工程任务后端' },
   { id: 'codex', name: 'Codex', icon: '⌘', color: '#40c47a', desc: '代码阅读、修改与验证' },
   { id: 'claude_code', name: 'Claude Code', icon: '◇', color: '#c98520', desc: '备用代码执行通道' },
   { id: 'visual', name: 'Visual Service', icon: '◔', color: '#4b77ff', desc: '可视化状态页与执行效果展示' },
@@ -132,8 +133,8 @@ function statusLabel(status) {
 function isWorking(state) {
   const workers = state?.workers || [];
   const proposal = state?.proposal || {};
-  return state?.mode === 'task'
-    || proposal.state === 'pending'
+  return proposal.state === 'pending'
+    || proposal.state === 'accepted'
     || workers.some((worker) => ['pending', 'accepted', 'running'].includes(worker.status));
 }
 
@@ -294,7 +295,8 @@ function normalizeWorkerAgent(worker) {
   if (rawId.includes('joyinside')) return 'joyinside';
   if (rawId.includes('codex')) return 'codex';
   if (rawId.includes('claude')) return 'claude_code';
-  if (rawId.includes('hermes') || rawId.includes('openclaw')) return 'hermes';
+  if (rawId.includes('openclaw')) return 'openclaw';
+  if (rawId.includes('hermes')) return 'hermes';
   if (rawId.includes('visual')) return 'visual';
   return 'dispatcher';
 }
@@ -345,13 +347,15 @@ function mergedAgents(state) {
 }
 
 function renderAgents(state) {
-  els.agentGrid.innerHTML = mergedAgents(state).map((agent) => `
-    <button class="agent-card ${agent.active ? 'active' : ''} ${agent.failed ? 'failed' : ''}" type="button" data-agent="${escapeHtml(agent.id)}">
+  const agents = mergedAgents(state);
+  els.agentGrid.classList.toggle('has-active', agents.some((agent) => agent.active));
+  els.agentGrid.innerHTML = agents.map((agent) => `
+    <button class="agent-card ${agent.active ? 'active' : ''} ${agent.failed ? 'failed' : ''}" type="button" data-agent="${escapeHtml(agent.id)}" aria-pressed="${agent.active ? 'true' : 'false'}">
       <div class="agent-card-head">
         <div class="agent-icon" style="background:${escapeHtml(agent.color)}">${escapeHtml(agent.icon)}</div>
         <div class="agent-meta">
           <h3>${escapeHtml(agent.name)}</h3>
-          <span class="agent-chip">${escapeHtml(agent.active ? agent.status || '运行中' : agent.status || '就绪')}</span>
+          <span class="agent-chip">${escapeHtml(agent.active ? `当前 · ${agent.status || '运行中'}` : agent.status || '就绪')}</span>
         </div>
       </div>
       <div class="agent-desc">${escapeHtml(agent.desc || '随时待命')}</div>
@@ -366,6 +370,12 @@ function renderAgents(state) {
       renderAgents(lastState || {});
     });
   });
+}
+
+function renderPageState(state) {
+  const working = isWorking(state);
+  document.body.classList.toggle('is-working', working);
+  document.body.classList.toggle('is-chatting', !working && state?.mode === 'chat');
 }
 
 function renderWorkflow(state) {
@@ -503,6 +513,7 @@ async function loadState() {
 function render(state, events) {
   lastState = state;
   lastEvents = events;
+  renderPageState(state);
   renderConnection(state);
   renderHero(state);
   renderProposal(state);

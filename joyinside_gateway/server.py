@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 from dispatcher.server import (  # noqa: E402
     dispatch_agent,
     list_agents,
+    openclaw_agent_task,
     query_agent_status,
     read_daily_report,
 )
@@ -77,6 +78,8 @@ def _infer_tool(text: str, explicit: str | None) -> str:
         return "read_daily_report"
     if any(word in text for word in ["刚才", "好了没", "搞定", "状态", "进展"]):
         return "query_agent_status"
+    if "openclaw" in lowered or "open claw" in lowered or "欧喷克劳" in text:
+        return "openclaw_agent_task"
     return "dispatch_agent"
 
 
@@ -122,6 +125,9 @@ async def _run_tool(tool: str, params: dict[str, Any]) -> str:
     if tool == "dispatch_agent":
         agent_id, task = _infer_agent_and_task(text, params)
         return await dispatch_agent(agent_id, task)
+    if tool == "openclaw_agent_task":
+        agent_id, task = _infer_agent_and_task(text, params)
+        return await openclaw_agent_task(agent_id, task)
     return f"未知工具: {tool}"
 
 

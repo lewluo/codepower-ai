@@ -1,6 +1,6 @@
 # CodePower AI — 语音版多 Agent 运营助手
 
-把一个多 agent 运营系统(OpenClaw Lite + Hermes)接到语音界面。一句话说"派 planner 做 XXX",小智就用 gpt 理解意图、调 MCP、派给 agent 执行,用 EdgeTTS 语音播报结果。
+把一个多 agent 运营系统(完整 OpenClaw Gateway + Hermes + Codex/Claude Code)接到语音界面。一句话说"派 planner 做 XXX",小智就用 GPT 理解意图、调 MCP、派给 agent 执行,用 EdgeTTS 语音播报结果。
 
 **硬件目标**:装在充电宝里的随身 coding 助手(ESP32 + 麦克风)。黑客松期间用浏览器模拟麦克风演示。
 
@@ -13,7 +13,8 @@ xiaozhi-esp32-server(8000 / 8003)
    ▼
 dispatcher(127.0.0.1:9001)       ← 本仓库核心代码
    │
-   ├── Hermes / OpenClaw dispatch.sh
+   ├── OpenClaw Gateway(openclaw agent / openclaw mcp serve)
+   ├── Hermes(独立后端)
    ├── 本机 Codex CLI / Claude Code CLI
    ├── xiaozhi chat 模式直连 JoyInside voiceChat
    ├── JoyInside skill gateway 入站回调(可选,127.0.0.1:9100)
@@ -32,8 +33,9 @@ dispatcher(127.0.0.1:9001)       ← 本仓库核心代码
 | Intent | function_call | 复用主 LLM,不另起模型 |
 | TTS | EdgeTTS | 免费,zh-CN-XiaoxiaoNeural 女声 |
 | MCP | streamable-http(`mcp>=1.22`) | 官方 Python SDK |
-| 主后端 | [Hermes](https://github.com/nous-research/hermes) | `hermes chat -q ... -Q --yolo` |
-| 兜底 | [OpenClaw Lite](https://github.com/xinnan-tech/openclaw-lite) + Claude `-p` | `~/.openclaw/lite/bin/dispatch.sh` |
+| 默认任务后端 | OpenClaw Gateway | `openclaw agent --agent ... --json` |
+| 独立后端 | [Hermes](https://github.com/nous-research/hermes) | `hermes chat -q ... -Q --yolo` |
+| 本机 MCP | OpenClaw MCP stdio | `openclaw mcp serve --url ws://127.0.0.1:18789` |
 
 ---
 
@@ -47,8 +49,9 @@ dispatcher(127.0.0.1:9001)       ← 本仓库核心代码
   curl -LsSf https://astral.sh/uv/install.sh | sh
   ```
 - 一个 OpenAI 兼容 + 支持 function_call 的 LLM(gpt-4/gpt-5 系、Qwen、DeepSeek v3 都行)
-- (可选)Hermes CLI — 作为"免费工具派发后端",详见下面
-- (可选)OpenClaw Lite — 作为"强力兜底",详见下面
+- OpenClaw CLI / Gateway — 默认任务后端和本机 MCP 连接,详见下面
+- (可选)Hermes CLI — 作为独立工程任务后端,详见下面
+- (可选)OpenClaw Lite — 只作为 legacy dispatch.sh 后端保留,默认不使用
 
 ### 1. 克隆本仓库
 
@@ -130,7 +133,7 @@ python3 test_xiaozhi_ws.py "列出所有可用的 agent"
 python3 test_xiaozhi_ws.py "读今天的日报"
 python3 test_xiaozhi_ws.py "派 planner 用一句话总结今天最紧急的 3 件事"
 python3 test_xiaozhi_ws.py "讲个很短的故事" chat
-python3 test_xiaozhi_ws.py "让 Hermes 只回复 OK" task --accept
+python3 test_xiaozhi_ws.py "让 OpenClaw 只回复 OK" task --accept
 
 # ③ 真麦克风语音
 python3 -m http.server 8006 --directory \
@@ -152,7 +155,7 @@ open http://localhost:8006/test_page.html
 - 设备连接状态、当前 `chat/task/auto` 模式
 - 语音对话输入与模型回复
 - dispatcher proposal 待确认 / 已采纳 / 已拒绝状态
-- Hermes、OpenClaw、Codex、Claude Code 等 worker 运行状态
+- OpenClaw、Hermes、Codex、Claude Code 等 worker 运行状态
 - 最近 session 和任务链路
 
 启动可视化服务:
@@ -190,7 +193,7 @@ open http://127.0.0.1:8006/test_page.html
 cd dispatcher
 source .venv/bin/activate
 python3 test_xiaozhi_ws.py "讲个很短的故事" chat
-python3 test_xiaozhi_ws.py "让 Hermes 只回复 OK" task --accept
+python3 test_xiaozhi_ws.py "让 OpenClaw 只回复 OK" task --accept
 ```
 
 演示截图:
@@ -203,7 +206,7 @@ python3 test_xiaozhi_ws.py "让 Hermes 只回复 OK" task --accept
 
 这里有两条链路,用途不同:
 
-1. **模式分流**:task 模式继续用自己的 `Gpt54LLM` 做 function calling,负责 Hermes、Codex、Claude Code、分身派发等任务;chat 模式在 xiaozhi-server 内直连 `JoyInsideLLM`,负责陪伴、游戏、讲故事、电子宠物等互动能力。
+1. **模式分流**:task 模式继续用自己的 `Gpt54LLM` 做 function calling,负责 OpenClaw、Hermes、Codex、Claude Code、分身派发等任务;chat 模式在 xiaozhi-server 内直连 `JoyInsideLLM`,负责陪伴、游戏、讲故事、电子宠物等互动能力。
 2. **JoyInside 云端回调 CodePower**:把本仓库的 `joyinside_gateway` 暴露成公网 HTTPS,让 JoyInside 平台里的自定义技能反过来调用 `list_agents`、`dispatch_agent`、`read_daily_report` 等本地工具。这条链路需要部署或 Cloudflare Tunnel。
 
 ### 配置环境变量
@@ -299,7 +302,61 @@ cloudflared tunnel --url http://127.0.0.1:9100
 
 ---
 
-## 接入 Hermes(可选,作为主路后端)
+## 接入完整 OpenClaw Gateway(默认任务后端)
+
+本仓库现在默认走完整 OpenClaw,不是 OpenClaw Lite。需要本机有 `openclaw` CLI,并启动 Gateway:
+
+```bash
+openclaw gateway status
+# 如果没运行:
+openclaw gateway start
+```
+
+默认配置:
+
+```bash
+CODEPOWER_AGENT_BACKEND=openclaw
+CODEPOWER_AGENT_BACKENDS=openclaw,hermes
+CODEPOWER_OPENCLAW_DEFAULT_AGENT=planner
+CODEPOWER_OPENCLAW_AGENTS=planner:规划师,site-ops:站点运维,support:客服,overseas-dev:出海开发,designer:设计师,keyword-miner:挖词官
+CODEPOWER_OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+```
+
+`CODEPOWER_OPENCLAW_AGENTS` 是可选的本地 agent 清单。配置后服务启动不会依赖 `openclaw agents list --json` 的探测结果;不配置时 dispatcher 会自动探测 Gateway agent。
+
+小智会同时加载两个 MCP server:
+
+```json
+{
+  "mcpServers": {
+    "openclaw-dispatcher": {
+      "url": "http://127.0.0.1:9001/mcp",
+      "transport": "streamable-http"
+    },
+    "openclaw-local": {
+      "command": "openclaw",
+      "args": ["mcp", "serve", "--url", "ws://127.0.0.1:18789", "--claude-channel-mode", "off"]
+    }
+  }
+}
+```
+
+验证:
+
+```bash
+openclaw agents list --json
+openclaw agent --agent planner --message "只回复 OK，用于连通性自测。" --json --timeout 60
+cd dispatcher
+source .venv/bin/activate
+python3 test_client.py call list_agent_backends
+python3 test_client.py call openclaw_agent_task planner "只回复 OK"
+```
+
+`dispatch_agent(agent_id, task)` 默认等价于走 OpenClaw。需要显式走 Hermes 时传 `backend=hermes`,或直接用 `hermes_repo_task(task)`。
+
+---
+
+## 接入 Hermes(可选,独立后端)
 
 Hermes 是本地运行的 agent CLI,走 OpenAI 兼容中转便宜。
 
@@ -332,13 +389,13 @@ hermes chat -q "你好,一句话自我介绍" -Q --yolo --source tool
 # 应在 10~20 秒内返回一句话
 ```
 
-dispatcher 会自动识别 `~/.local/bin/hermes`,在 `dispatch_agent` 调用时优先走 Hermes。如果 Hermes 失败(超时/异常)会自动回落到 OpenClaw 的 Claude。
+dispatcher 会自动识别 `~/.local/bin/hermes`。Hermes 不再和 OpenClaw 混在一起:显式调用 `hermes_repo_task(task)`,或配置 `CODEPOWER_AGENT_BACKEND=hermes` 后让 `dispatch_agent` 走 Hermes。
 
 ---
 
-## 接入 OpenClaw Lite(可选,作为强力兜底 + 提供 agent 身份)
+## 接入 OpenClaw Lite(可选 legacy 后端)
 
-OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色 agent(main / planner / site-ops / support / overseas-dev / designer / keyword-miner)。
+OpenClaw Lite 是旧的 `dispatch.sh + claude -p` 调度路径。本仓库保留 `openclaw_lite` 后端,但默认不再使用。
 
 ### 装 OpenClaw Lite
 
@@ -354,7 +411,7 @@ OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色
 
 ### 最简 agents.json 示例
 
-如果你不装完整 OpenClaw,可以手写一份最小 `~/.openclaw/lite/agents.json` 让 `list_agents` 和 `dispatch_agent(... via Hermes)` 工作:
+如果你不装完整 OpenClaw,可以手写一份最小 `~/.openclaw/lite/agents.json` 让 `list_agents` 有返回:
 
 ```json
 {
@@ -370,7 +427,14 @@ OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色
 }
 ```
 
-没有 `dispatch.sh` 时,`dispatch_agent` 全部走 Hermes;没有日报文件时 `read_daily_report` 会返回空目录提示。
+如需显式启用 Lite:
+
+```bash
+CODEPOWER_AGENT_BACKENDS=openclaw,hermes,openclaw_lite
+CODEPOWER_AGENT_FALLBACK_BACKENDS=openclaw_lite
+```
+
+没有日报文件时 `read_daily_report` 会返回空目录提示。
 
 ---
 
@@ -380,8 +444,10 @@ OpenClaw Lite 是自建的 launchd + `claude -p` 调度系统,提供 7 个角色
 
 | 工具 | 用途 | 调用路径 |
 |------|------|---------|
-| `list_agents()` | 列出 agent | 读 `~/.openclaw/lite/agents.json` |
-| `dispatch_agent(agent_id, task)` | 派发任务 | Hermes 主路 → Claude 兜底 |
+| `list_agents()` | 列出 agent | 优先读完整 OpenClaw Gateway,失败才读 Lite agents.json |
+| `list_agent_backends()` | 查看后端配置 | 读 `CODEPOWER_AGENT_BACKEND(S)` 等环境变量 |
+| `dispatch_agent(agent_id, task, backend)` | 派发任务 | 默认 OpenClaw Gateway;可选 Hermes / OpenClaw Lite |
+| `openclaw_agent_task(agent_id, task)` | 显式调用完整 OpenClaw | `openclaw agent --agent ... --json` |
 | `query_agent_status()` | 查最近一次任务 | 读 `/tmp/xiaozhi-dispatcher-state.json` |
 | `read_daily_report(date)` | 读日报 | 读 `~/.openclaw/workspace/logs/daily/*.md` |
 | `hermes_repo_task(task)` | 让 Hermes 执行通用工程任务 | 默认 `~/Desktop/work_space/hemers_work_dir`，可用 `CODEPOWER_HERMES_WORKSPACE` 改 |
@@ -402,7 +468,7 @@ xiaozhi-hackathon/
 ├── data/
 │   ├── .config.yaml.example      # 小智配置模板(进仓库)
 │   ├── .config.yaml              # 实际配置(含 api_key, .gitignore)
-│   └── .mcp_server_settings.json # MCP 接入点:指向 127.0.0.1:9001
+│   └── .mcp_server_settings.json # MCP 接入点:dispatcher + openclaw-local
 ├── models/SenseVoiceSmall/       # ASR 模型(模型文件 .gitignore)
 ├── dispatcher/                   # 自研 MCP server
 │   ├── server.py                 # MCP 工具服务
@@ -425,7 +491,7 @@ xiaozhi-hackathon/
 ## 关键配置点(避坑)
 
 1. **LLM 必须支持 function calling** — 不支持的话工具不会被调。已验证 gpt-5.4(86gamestore)、deepseek-chat、openai gpt-4o 都支持。
-2. **`tool_call_timeout: 300`** — `.config.yaml` 里默认 300s。默认 30s 对 Hermes / Codex / Claude Code 不够。
+2. **`tool_call_timeout: 300`** — `.config.yaml` 里默认 300s。默认 30s 对 OpenClaw / Hermes / Codex / Claude Code 不够。
 3. **SOCKS 代理会干扰 httpx** — `start.sh` 已 unset 所有代理变量。如果你自己起 dispatcher,记得先 `unset ALL_PROXY HTTPS_PROXY HTTP_PROXY`。
 4. **首轮 MCP 竞态** — 改了 `core/connection.py` 7 行,见上面「修补小智源码」。
 5. **prompt 里必须列出工具名** — LLM 拿到 `tools=[...]` 但偶尔会幻觉"没这功能",所以在 system prompt 里明确罗列工具 + 路由规则,成功率接近 100%。
@@ -450,10 +516,10 @@ xiaozhi-hackathon/
 ## 常见问题
 
 **Q: 可以不要 OpenClaw 吗?**
-A: 可以。只要一个最简 `agents.json`(见上面),`dispatch_agent` 就能全走 Hermes 了。
+A: 可以。把 `CODEPOWER_AGENT_BACKEND=hermes`,并保留最简 `agents.json` 给 `list_agents` 和 agent_id 校验。
 
 **Q: 可以不要 Hermes 吗?**
-A: 可以。`dispatch.sh` 会直接兜底。但你需要装完整 OpenClaw Lite 并有 Claude CLI 授权。
+A: 可以。默认就是 OpenClaw Gateway。Hermes 只是独立可选后端。
 
 **Q: 都不装呢?**
 A: 那 `list_agents` 空,`dispatch_agent` 无路径可走。你可以只保留 `read_daily_report` + 自己加新 MCP 工具。
@@ -471,4 +537,4 @@ A: 不必。改 `data/.config.yaml` 里的 `prompt:` 块成英文,TTS 换 `en-US
 MIT(本仓库)。依赖项目各有各的 license:
 - xiaozhi-esp32-server — MIT
 - Hermes — 按各自 license
-- OpenClaw Lite — 按各自 license
+- OpenClaw / OpenClaw Lite — 按各自 license

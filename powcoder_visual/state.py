@@ -459,7 +459,18 @@ def start_worker(
     workspace: str | None = None,
 ) -> None:
     worker_id = worker_id or f"{kind}_{agent_id or 'main'}"
-    active_task_id = read_state().get("active_task_id") or run_id
+    current_state = read_state()
+    current_task_id = current_state.get("active_task_id") or ""
+    proposal_state = (current_state.get("proposal") or {}).get("state")
+    has_active_worker = any(
+        worker.get("status") in {"pending", "accepted", "running"}
+        for worker in current_state.get("workers", [])
+    )
+    active_task_id = (
+        current_task_id
+        if current_task_id and (proposal_state in {"pending", "accepted"} or has_active_worker)
+        else run_id
+    )
     worker = {
         "worker_id": worker_id,
         "kind": kind,

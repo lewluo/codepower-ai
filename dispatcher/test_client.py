@@ -34,6 +34,10 @@ async def main(url: str, action: str, *args: str):
                 payload = {}
                 if tool_name == "dispatch_agent" and len(args) >= 3:
                     payload = {"agent_id": args[1], "task": args[2]}
+                    if len(args) >= 4:
+                        payload["backend"] = args[3]
+                elif tool_name == "openclaw_agent_task" and len(args) >= 3:
+                    payload = {"agent_id": args[1], "task": args[2]}
                 elif tool_name == "read_daily_report" and len(args) >= 2:
                     payload = {"date": args[1]}
                 elif tool_name in {"run_codex", "run_claude_code"} and len(args) >= 2:

@@ -1,10 +1,12 @@
 """
 OpenClaw Dispatcher — 小智语音的后端工具服务
-架构: 小智(Docker) → streamable-http MCP → 本服务(host:9000) → Hermes/OpenClaw
+架构: 小智(Docker) → streamable-http MCP → 本服务(host:9000) → Hermes / OpenClaw Gateway / Codex / Claude Code
 
 工具:
   list_agents()                    - 列出可用 agent
-  dispatch_agent(agent_id, task)   - 派发任务(Hermes 主路, Claude 兜底)
+  list_agent_backends()            - 列出可用任务后端
+  dispatch_agent(agent_id, task)   - 按配置派发任务
+  openclaw_agent_task(...)         - 调完整 OpenClaw Gateway agent
   query_agent_status()             - 查询最近一次派发状态
   read_daily_report(date='today')  - 读 OpenClaw 日报
   hermes_repo_task(task)           - 调 Hermes 在专用工作目录执行仓库任务
@@ -51,6 +53,12 @@ AGENTS_JSON = HOME / ".openclaw/lite/agents.json"
 DISPATCH_SH = HOME / ".openclaw/lite/bin/dispatch.sh"
 DAILY_LOG_DIR = HOME / ".openclaw/workspace/logs/daily"
 HERMES = HOME / ".local/bin/hermes"
+OPENCLAW_BIN_RAW = os.environ.get("CODEPOWER_OPENCLAW_BIN", "openclaw")
+OPENCLAW = (
+    str(Path(OPENCLAW_BIN_RAW).expanduser())
+    if "/" in OPENCLAW_BIN_RAW
+    else shutil.which(OPENCLAW_BIN_RAW)
+)
 CODEX = shutil.which("codex")
 CLAUDE = shutil.which("claude")
 WORKSPACE_DIR = Path(
@@ -66,7 +74,24 @@ RUNS_DIR.mkdir(exist_ok=True)
 
 HERMES_TIMEOUT_SEC = 600         # 10 分钟
 HERMES_REPO_TIMEOUT_SEC = 600
-CLAUDE_FALLBACK_TIMEOUT_SEC = 300
+OPENCLAW_AGENT_TIMEOUT_SEC = int(os.environ.get("CODEPOWER_OPENCLAW_AGENT_TIMEOUT_SEC", "600"))
+OPENCLAW_AGENT_LIST_TIMEOUT_SEC = int(os.environ.get("CODEPOWER_OPENCLAW_AGENT_LIST_TIMEOUT_SEC", "8"))
+OPENCLAW_DEFAULT_AGENT_ID = os.environ.get("CODEPOWER_OPENCLAW_DEFAULT_AGENT", "planner")
+OPENCLAW_AGENTS_CONFIG = os.environ.get("CODEPOWER_OPENCLAW_AGENTS", "")
+OPENCLAW_THINKING = os.environ.get("CODEPOWER_OPENCLAW_THINKING", "")
+OPENCLAW_GATEWAY_URL = os.environ.get("CODEPOWER_OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789")
+OPENCLAW_LITE_TIMEOUT_SEC = int(os.environ.get("CODEPOWER_OPENCLAW_LITE_TIMEOUT_SEC", "300"))
+AGENT_BACKEND = os.environ.get("CODEPOWER_AGENT_BACKEND", "openclaw")
+AGENT_BACKENDS = tuple(
+    item.strip().lower()
+    for item in os.environ.get("CODEPOWER_AGENT_BACKENDS", "openclaw,hermes").split(",")
+    if item.strip()
+)
+AGENT_FALLBACK_BACKENDS = tuple(
+    item.strip().lower()
+    for item in os.environ.get("CODEPOWER_AGENT_FALLBACK_BACKENDS", "").split(",")
+    if item.strip()
+)
 CODEX_TIMEOUT_SEC = 600
 CLAUDE_CODE_TIMEOUT_SEC = 600
 JOYINSIDE_TIMEOUT_SEC = 20
@@ -104,13 +129,115 @@ JOYINSIDE_UID = os.environ.get("JOYINSIDE_UID", "codepower-local-user")
 _JOYINSIDE_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
 
 mcp = FastMCP("openclaw-dispatcher")
+_OPENCLAW_AGENTS_CACHE: tuple[float, dict] = (0.0, {})
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
-def _load_agents() -> dict:
+def _parse_first_json_value(text: str):
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char not in "[{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+            return value
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _load_lite_agents() -> dict:
     if not AGENTS_JSON.exists():
         return {}
     with AGENTS_JSON.open() as f:
         return json.load(f).get("agents", {})
+
+
+def _load_configured_openclaw_agents() -> dict:
+    agents: dict[str, dict] = {}
+    for item in OPENCLAW_AGENTS_CONFIG.split(","):
+        raw = item.strip()
+        if not raw:
+            continue
+        if ":" in raw:
+            agent_id, role = raw.split(":", 1)
+        elif "=" in raw:
+            agent_id, role = raw.split("=", 1)
+        else:
+            agent_id, role = raw, raw
+        agent_id = agent_id.strip()
+        role = role.strip() or agent_id
+        if not agent_id:
+            continue
+        agents[agent_id] = {
+            "role": role,
+            "emoji": "",
+            "workspace": "",
+            "model": "",
+            "is_default": agent_id == OPENCLAW_DEFAULT_AGENT_ID,
+            "source": "openclaw_config",
+        }
+    return agents
+
+
+def _load_openclaw_agents() -> dict:
+    global _OPENCLAW_AGENTS_CACHE
+    configured = _load_configured_openclaw_agents()
+    if configured:
+        return configured
+    cached_at, cached = _OPENCLAW_AGENTS_CACHE
+    if cached and time.time() - cached_at < 60:
+        return cached
+    if not OPENCLAW:
+        return {}
+    try:
+        proc = subprocess.run(
+            [OPENCLAW, "agents", "list", "--json"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=OPENCLAW_AGENT_LIST_TIMEOUT_SEC,
+            check=False,
+        )
+    except Exception:
+        return {}
+    if proc.returncode != 0:
+        return {}
+    data = _parse_first_json_value(proc.stdout or "")
+    if not isinstance(data, list):
+        return {}
+    agents: dict[str, dict] = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("id") or "").strip()
+        if not agent_id:
+            continue
+        agents[agent_id] = {
+            "role": item.get("identityName") or item.get("name") or agent_id,
+            "emoji": item.get("identityEmoji") or "",
+            "workspace": item.get("workspace") or "",
+            "model": item.get("model") or "",
+            "is_default": bool(item.get("isDefault")),
+            "source": "openclaw",
+        }
+    if agents:
+        _OPENCLAW_AGENTS_CACHE = (time.time(), agents)
+    return agents
+
+
+def _load_agent_registry() -> tuple[dict, str]:
+    agents = _load_openclaw_agents()
+    if agents:
+        return agents, "openclaw"
+    agents = _load_lite_agents()
+    if agents:
+        return agents, "openclaw_lite"
+    return {}, ""
+
+
+def _load_agents() -> dict:
+    return _load_agent_registry()[0]
 
 
 def _agent_role_prompt(agent_id: str) -> str:
@@ -152,6 +279,20 @@ def _visual_finish_worker(**kwargs) -> None:
         visual_state.finish_worker(**kwargs)
     except Exception as e:
         print(f"[visual_state] finish_worker failed: {type(e).__name__}: {e}")
+
+
+def _persist_run_state(state: dict) -> None:
+    _save_state(state)
+    run_id = state.get("run_id")
+    if run_id:
+        (RUNS_DIR / f"{run_id}.json").write_text(
+            json.dumps(state, ensure_ascii=False, indent=2)
+        )
+
+
+def _track_background_task(task: asyncio.Task) -> None:
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 async def _run_hermes(
@@ -200,8 +341,85 @@ async def _run_hermes(
         return False, f"Hermes 异常: {type(e).__name__}: {e}"
 
 
+def _extract_openclaw_text(data: dict) -> str:
+    result = data.get("result")
+    if isinstance(result, dict):
+        payloads = result.get("payloads")
+        if isinstance(payloads, list):
+            parts = [
+                str(item.get("text") or "").strip()
+                for item in payloads
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ]
+            if parts:
+                return "\n".join(parts)
+        for key in ("finalAssistantVisibleText", "finalAssistantRawText", "text"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("summary", "message", "text"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+async def _run_openclaw_agent(agent_id: str, task: str, timeout: int) -> tuple[bool, str]:
+    """调完整 OpenClaw Gateway agent,返回 (成功, 结果文本)。"""
+    if not OPENCLAW:
+        return False, "OpenClaw CLI 未安装或不在 PATH 中。"
+    cmd = [
+        OPENCLAW,
+        "agent",
+        "--agent",
+        agent_id,
+        "--message",
+        task,
+        "--json",
+        "--timeout",
+        str(timeout),
+    ]
+    if OPENCLAW_THINKING:
+        cmd += ["--thinking", OPENCLAW_THINKING]
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout + 20)
+        text = out.decode("utf-8", errors="replace")
+        data = _parse_first_json_value(text)
+        if not isinstance(data, dict):
+            if proc.returncode != 0:
+                return False, f"OpenClaw exit={proc.returncode}: {text[:500]}"
+            return True, text.strip() or "(无输出)"
+        result_text = _extract_openclaw_text(data) or "(无输出)"
+        if proc.returncode != 0 or data.get("status") not in (None, "ok", "success"):
+            status = data.get("status") or f"exit={proc.returncode}"
+            return False, f"OpenClaw {status}: {result_text[:500]}"
+        return True, result_text
+    except asyncio.CancelledError:
+        try:
+            if proc and proc.returncode is None:
+                proc.kill()
+        except Exception:
+            pass
+        return False, "OpenClaw 调用被上游连接取消"
+    except asyncio.TimeoutError:
+        try:
+            if proc and proc.returncode is None:
+                proc.kill()
+        except Exception:
+            pass
+        return False, f"OpenClaw 超时 ({timeout}s)"
+    except Exception as e:
+        return False, f"OpenClaw 异常: {type(e).__name__}: {e}"
+
+
 async def _run_claude_dispatch(agent_id: str, task: str, timeout: int) -> tuple[bool, str]:
-    """调 OpenClaw dispatch.sh(claude -p 兜底),返回 (成功, 结果文本)"""
+    """调 OpenClaw Lite dispatch.sh,返回 (成功, 结果文本)。保留为显式 legacy 后端。"""
     if not DISPATCH_SH.exists():
         return False, "dispatch.sh 不存在"
     try:
@@ -435,28 +653,137 @@ def _joyinside_chat_sync(input: str, session_id: str = "codepower-tool") -> str:
 
 @mcp.tool()
 async def list_agents() -> str:
-    """列出所有可用的 OpenClaw agent 及其角色职责。在用户问"有哪些 agent"时调用。"""
-    agents = _load_agents()
+    """列出所有可用的 OpenClaw agent 及其角色职责。在用户问"有哪些 agent"时调用。优先读取完整 OpenClaw Gateway。"""
+    agents, source = _load_agent_registry()
     if not agents:
-        return "未找到 agent 注册表(~/.openclaw/lite/agents.json 不存在)"
-    lines = [f"共有 {len(agents)} 个 agent:"]
+        return "未找到 OpenClaw agent。请确认 openclaw CLI/Gateway 已安装并运行。"
+    source_name = "OpenClaw Gateway" if source == "openclaw" else "OpenClaw Lite"
+    lines = [f"{source_name} 共有 {len(agents)} 个 agent:"]
     for aid, a in agents.items():
-        lines.append(f"- {aid}: {a.get('role', '(无描述)')}")
+        default_mark = "（默认）" if a.get("is_default") else ""
+        workspace = f" · {a.get('workspace')}" if a.get("workspace") else ""
+        lines.append(f"- {aid}{default_mark}: {a.get('role', '(无描述)')}{workspace}")
+    return "\n".join(lines)
+
+
+def _normalize_backend(backend: str) -> str:
+    normalized = (backend or "").strip().lower().replace("-", "_")
+    aliases = {
+        "openclaw_gateway": "openclaw",
+        "gateway": "openclaw",
+        "claw": "openclaw",
+        "lite": "openclaw_lite",
+        "claude": "openclaw_lite",
+        "claude_dispatch": "openclaw_lite",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _resolve_agent_backends(requested: str = "") -> list[str]:
+    enabled = [_normalize_backend(item) for item in AGENT_BACKENDS] or ["openclaw"]
+    primary = _normalize_backend(requested or AGENT_BACKEND or enabled[0])
+    if primary == "auto":
+        primary = enabled[0]
+    if requested:
+        return [primary]
+    backends = [primary]
+    backends.extend(_normalize_backend(item) for item in AGENT_FALLBACK_BACKENDS)
+    resolved: list[str] = []
+    for item in backends:
+        if not item or item in resolved:
+            continue
+        if item not in enabled and requested:
+            continue
+        resolved.append(item)
+    return resolved or enabled
+
+
+def _resolve_agent_id(agent_id: str, agents: dict) -> tuple[str, str]:
+    requested = (agent_id or "").strip()
+    if requested in agents:
+        return requested, ""
+    if requested in {"", "main", "default", "默认", "主力"} and OPENCLAW_DEFAULT_AGENT_ID in agents:
+        return OPENCLAW_DEFAULT_AGENT_ID, f"agent '{requested or 'default'}' 已映射到 OpenClaw 默认 agent '{OPENCLAW_DEFAULT_AGENT_ID}'。"
+    return requested, ""
+
+
+def _backend_display_name(backend: str, agent_id: str) -> tuple[str, str]:
+    if backend == "openclaw":
+        return "openclaw", f"OpenClaw {agent_id}"
+    if backend == "hermes":
+        return "hermes", f"Hermes {agent_id}"
+    if backend == "openclaw_lite":
+        return "openclaw_lite", f"OpenClaw Lite {agent_id}"
+    return "dispatcher", f"{backend} {agent_id}"
+
+
+async def _run_agent_backend(
+    *,
+    backend: str,
+    agent_id: str,
+    task: str,
+    full_prompt: str,
+    run_id: str,
+) -> tuple[bool, str, str]:
+    kind, display_name = _backend_display_name(backend, agent_id)
+    worker_id = f"dispatch_{agent_id}_{backend}"
+    _visual_start_worker(
+        kind=kind,
+        task=task,
+        run_id=f"{run_id}_{backend}",
+        worker_id=worker_id,
+        display_name=display_name,
+        agent_id=agent_id,
+    )
+    if backend == "openclaw":
+        ok, result = await _run_openclaw_agent(
+            agent_id,
+            f"{task}\n\n请简短作答(150 字内),能直接被语音播报。",
+            OPENCLAW_AGENT_TIMEOUT_SEC,
+        )
+    elif backend == "hermes":
+        ok, result = await _run_hermes(full_prompt, HERMES_TIMEOUT_SEC)
+    elif backend == "openclaw_lite":
+        ok, result = await _run_claude_dispatch(agent_id, task, OPENCLAW_LITE_TIMEOUT_SEC)
+    else:
+        ok, result = False, f"未知 agent 后端: {backend}"
+    _visual_finish_worker(
+        run_id=f"{run_id}_{backend}",
+        worker_id=worker_id,
+        status="success" if ok else "failed",
+        result=result,
+    )
+    return ok, result, backend
+
+
+@mcp.tool()
+async def list_agent_backends() -> str:
+    """列出当前可用的任务执行后端。用户问"Hermes/OpenClaw 怎么配置"时调用。"""
+    lines = [
+        f"默认后端: {_normalize_backend(AGENT_BACKEND)}",
+        f"启用后端: {', '.join(_normalize_backend(item) for item in AGENT_BACKENDS) or '无'}",
+        f"失败兜底: {', '.join(_normalize_backend(item) for item in AGENT_FALLBACK_BACKENDS) or '未启用'}",
+        f"OpenClaw CLI: {OPENCLAW or 'MISSING'}",
+        f"OpenClaw Gateway: {OPENCLAW_GATEWAY_URL}",
+        f"Hermes CLI: {HERMES if HERMES.exists() else 'MISSING'}",
+        f"OpenClaw Lite dispatch.sh: {DISPATCH_SH if DISPATCH_SH.exists() else 'MISSING'}",
+    ]
     return "\n".join(lines)
 
 
 @mcp.tool()
-async def dispatch_agent(agent_id: str, task: str) -> str:
-    """派发一个任务给指定 agent 执行。
-    优先走 Hermes(gpt-5.4,免费快速),Hermes 失败自动回落 OpenClaw(Claude,更强但有费用)。
+async def dispatch_agent(agent_id: str, task: str, backend: str = "") -> str:
+    """派发一个任务给指定 agent 执行。默认后端由 CODEPOWER_AGENT_BACKEND 配置,OpenClaw 与 Hermes 独立存在。
 
     参数:
-      agent_id: 必须是以下之一 — main, planner, site-ops, support, overseas-dev, designer, keyword-miner
+      agent_id: OpenClaw agent id,例如 planner / site-ops / support / overseas-dev / designer / keyword-miner
       task: 任务描述(自然语言,例如"查今天日报" / "看看 bazi 站点状态")
+      backend: 可选。openclaw / hermes / openclaw_lite。为空时走 CODEPOWER_AGENT_BACKEND。
 
     返回: 执行结果文本(简短,可直接给用户听)
     """
     agents = _load_agents()
+    agent_id, alias_note = _resolve_agent_id(agent_id, agents)
     if agent_id not in agents:
         return f"agent '{agent_id}' 不存在。可用: {', '.join(agents.keys())}"
 
@@ -472,66 +799,27 @@ async def dispatch_agent(agent_id: str, task: str) -> str:
         "task": task,
         "started": started,
         "status": "running",
-        "backend": "hermes",
+        "backend": _normalize_backend(backend or AGENT_BACKEND),
     }
     _save_state(state)
 
-    # 主路: Hermes
-    hermes_worker_id = f"dispatch_{agent_id}_hermes"
-    _visual_start_worker(
-        kind="hermes",
-        task=task,
-        run_id=f"{run_id}_hermes",
-        worker_id=hermes_worker_id,
-        display_name=f"Hermes {agent_id}",
-        agent_id=agent_id,
-    )
-    ok, result = await _run_hermes(full_prompt, HERMES_TIMEOUT_SEC)
-    backend_used = "hermes"
-
-    if not ok:
-        _visual_finish_worker(
-            run_id=f"{run_id}_hermes",
-            worker_id=hermes_worker_id,
-            status="failed",
-            result=result,
-        )
-        # 兜底: Claude via OpenClaw
-        claude_worker_id = f"dispatch_{agent_id}_claude"
-        _visual_start_worker(
-            kind="openclaw",
-            task=task,
-            run_id=f"{run_id}_claude",
-            worker_id=claude_worker_id,
-            display_name=f"OpenClaw {agent_id}",
+    ok = False
+    result = ""
+    backend_used = ""
+    failures: list[str] = []
+    for candidate in _resolve_agent_backends(backend):
+        ok, result, backend_used = await _run_agent_backend(
+            backend=candidate,
             agent_id=agent_id,
+            task=task,
+            full_prompt=full_prompt,
+            run_id=run_id,
         )
-        ok2, result2 = await _run_claude_dispatch(agent_id, task, CLAUDE_FALLBACK_TIMEOUT_SEC)
-        if ok2:
-            result = result2
-            ok = True
-            backend_used = "claude"
-            _visual_finish_worker(
-                run_id=f"{run_id}_claude",
-                worker_id=claude_worker_id,
-                status="success",
-                result=result,
-            )
-        else:
-            result = f"主路 Hermes 失败: {result}\n兜底 Claude 也失败: {result2}"
-            _visual_finish_worker(
-                run_id=f"{run_id}_claude",
-                worker_id=claude_worker_id,
-                status="failed",
-                result=result2,
-            )
-    else:
-        _visual_finish_worker(
-            run_id=f"{run_id}_hermes",
-            worker_id=hermes_worker_id,
-            status="success",
-            result=result,
-        )
+        if ok:
+            break
+        failures.append(f"{candidate}: {result}")
+    if not ok and failures:
+        result = "\n".join(failures)
 
     finished = datetime.now().isoformat(timespec="seconds")
     state.update({
@@ -539,15 +827,105 @@ async def dispatch_agent(agent_id: str, task: str) -> str:
         "status": "success" if ok else "failed",
         "backend": backend_used,
         "result": result[:2000],
+        "alias_note": alias_note,
     })
     _save_state(state)
     # 持久化运行记录
     (RUNS_DIR / f"{run_id}.json").write_text(json.dumps(state, ensure_ascii=False, indent=2))
 
     if ok:
-        return f"[{backend_used} 已完成] {result}"
+        prefix_note = f"{alias_note}\n" if alias_note else ""
+        return f"{prefix_note}[{backend_used} 已完成] {result}"
     else:
         return f"[派发失败] {result[:500]}"
+
+
+async def _complete_openclaw_background(
+    *,
+    run_id: str,
+    worker_id: str,
+    agent_id: str,
+    task: str,
+    state: dict,
+) -> None:
+    ok, result = await _run_openclaw_agent(
+        agent_id,
+        f"{task}\n\n请简短作答(150 字内),能直接被语音播报。",
+        OPENCLAW_AGENT_TIMEOUT_SEC,
+    )
+    finished = datetime.now().isoformat(timespec="seconds")
+    state.update(
+        {
+            "finished": finished,
+            "status": "success" if ok else "failed",
+            "backend": "openclaw",
+            "result": result[:2000],
+        }
+    )
+    _persist_run_state(state)
+    _visual_finish_worker(
+        run_id=f"{run_id}_openclaw",
+        worker_id=worker_id,
+        status="success" if ok else "failed",
+        result=result,
+    )
+
+
+@mcp.tool()
+async def openclaw_agent_task(agent_id: str = "", task: str = "", wait: bool = False) -> str:
+    """显式调用完整 OpenClaw Gateway 的 agent 执行任务。不是 OpenClaw Lite,也不走 Hermes。
+
+    参数:
+      agent_id: OpenClaw agent id。为空或 main/default 时映射到 CODEPOWER_OPENCLAW_DEFAULT_AGENT。
+      task: 任务描述。
+      wait: 是否同步等待 OpenClaw 结果。语音/小智场景默认 false,避免长任务阻塞连接。
+    """
+    agents = _load_openclaw_agents()
+    if not agents:
+        return "未找到完整 OpenClaw Gateway agent。请先确认 openclaw gateway 已运行,并且 openclaw agents list --json 可用。"
+    resolved_agent_id, alias_note = _resolve_agent_id(agent_id, agents)
+    if resolved_agent_id not in agents:
+        return f"agent '{resolved_agent_id}' 不存在。可用: {', '.join(agents.keys())}"
+    if not task.strip():
+        return "OpenClaw 任务为空。"
+    if wait:
+        return await dispatch_agent(resolved_agent_id, task, backend="openclaw")
+
+    run_id = f"run_{int(time.time())}"
+    worker_id = f"dispatch_{resolved_agent_id}_openclaw"
+    started = datetime.now().isoformat(timespec="seconds")
+    state = {
+        "run_id": run_id,
+        "agent_id": resolved_agent_id,
+        "task": task,
+        "started": started,
+        "status": "running",
+        "backend": "openclaw",
+        "async": True,
+        "alias_note": alias_note,
+    }
+    _save_state(state)
+    _visual_start_worker(
+        kind="openclaw",
+        task=task,
+        run_id=f"{run_id}_openclaw",
+        worker_id=worker_id,
+        display_name=f"OpenClaw {resolved_agent_id}",
+        agent_id=resolved_agent_id,
+    )
+    _track_background_task(
+        asyncio.create_task(
+            _complete_openclaw_background(
+                run_id=run_id,
+                worker_id=worker_id,
+                agent_id=resolved_agent_id,
+                task=task,
+                state=state,
+            )
+        )
+    )
+    prefix_note = f"{alias_note}\n" if alias_note else ""
+    return f"{prefix_note}[openclaw 已派发] {resolved_agent_id} 正在执行「{task[:80]}」。你可以稍后问“刚才那活儿进展”。"
 
 
 @mcp.tool()
@@ -727,14 +1105,16 @@ async def query_agent_status(tool: str = "", recent: int = 1) -> str:
     """查询任务执行状态。
 
     参数:
-      tool: 按工具类型筛选。可选值："hermes"、"claude"、"codex"、"dispatch"、"email"。
-            为空则不筛选。用户说"Hermes那个任务"时传 "hermes"，说"Claude Code的结果"传 "claude"。
+      tool: 按工具类型筛选。可选值："openclaw"、"hermes"、"claude"、"codex"、"dispatch"、"email"。
+            为空则不筛选。用户说"OpenClaw 那个任务"时传 "openclaw"，说"Hermes那个任务"时传 "hermes"。
       recent: 返回最近几条记录，默认1条。用户说"最近的任务都有啥"时可设为3~5。
 
     返回: 任务状态和结果摘要
     """
-    # 工具类型 → run_id 前缀映射
+    # 工具类型 → run_id 前缀映射。dispatch_agent 的 run_id 都是 run_*,
+    # openclaw/hermes 这类后端需要再看 state.backend,避免互相串结果。
     tool_prefix = {
+        "openclaw": "run_",
         "hermes": "hermes_",
         "claude": "claude_",
         "codex": "codex_",
@@ -759,6 +1139,11 @@ async def query_agent_status(tool: str = "", recent: int = 1) -> str:
             continue
         try:
             state = json.loads(run_file.read_text())
+            if tool in {"openclaw", "hermes", "openclaw_lite"}:
+                backend = str(state.get("backend") or "")
+                direct_tool = str(state.get("tool") or "")
+                if backend != tool and not direct_tool.startswith(tool):
+                    continue
             results.append(_format_status(state))
         except Exception:
             continue
@@ -970,10 +1355,18 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9000"))
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[dispatcher] MCP streamable-http on 0.0.0.0:{port}/mcp")
-    print(f"[dispatcher] agents: {list(_load_agents().keys())}")
+    if OPENCLAW_AGENTS_CONFIG:
+        agents = _load_configured_openclaw_agents()
+        print(f"[dispatcher] agents(openclaw_config): {list(agents.keys())}")
+    else:
+        print("[dispatcher] agents: lazy load via list_agents/openclaw_agent_task")
+    print(f"[dispatcher] agent backend default: {_normalize_backend(AGENT_BACKEND)}")
+    print(f"[dispatcher] agent backends enabled: {', '.join(_normalize_backend(item) for item in AGENT_BACKENDS)}")
+    print(f"[dispatcher] openclaw: {OPENCLAW or 'MISSING'}")
+    print(f"[dispatcher] openclaw gateway: {OPENCLAW_GATEWAY_URL}")
     print(f"[dispatcher] hermes: {HERMES} ({'ok' if HERMES.exists() else 'MISSING'})")
     print(f"[dispatcher] hermes workspace: {WORKSPACE_DIR}")
-    print(f"[dispatcher] dispatch.sh: {DISPATCH_SH} ({'ok' if DISPATCH_SH.exists() else 'MISSING'})")
+    print(f"[dispatcher] openclaw lite dispatch.sh: {DISPATCH_SH} ({'ok' if DISPATCH_SH.exists() else 'MISSING'})")
     print(f"[dispatcher] codex: {CODEX or 'MISSING'}")
     print(f"[dispatcher] claude: {CLAUDE or 'MISSING'}")
     # FastMCP streamable-http 默认路径 /mcp,端口通过 settings

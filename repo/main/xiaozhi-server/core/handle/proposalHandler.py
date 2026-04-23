@@ -19,6 +19,7 @@ TAG = __name__
 _READONLY_TOOLS = {
     "query_agent_status",
     "list_agents",
+    "list_agent_backends",
     "read_daily_report",
     "get_lunar",
     "self_get_device_status",
@@ -49,7 +50,9 @@ def _dump_arguments(arguments: Any) -> str:
 
 _TOOL_DISPLAY = {
     "hermes_repo_task": "Hermes",
+    "openclaw_agent_task": "OpenClaw",
     "dispatch_agent": "分身派发",
+    "list_agent_backends": "后端配置",
     "list_agents": "查看分身",
     "query_agent_status": "查询进度",
     "read_daily_report": "读日报",

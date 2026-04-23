@@ -59,11 +59,13 @@ async def send_text(
         llm_pieces: list[str] = []
         end = asyncio.get_event_loop().time() + total_timeout
         saw_stop = False
+        accepted_sent = False
+        proposal_completed = False
         while asyncio.get_event_loop().time() < end:
             try:
                 msg = await asyncio.wait_for(ws.recv(), timeout=5)
             except asyncio.TimeoutError:
-                if saw_stop:
+                if saw_stop and not (accepted_sent and not proposal_completed):
                     break
                 continue
             if isinstance(msg, bytes):
@@ -90,6 +92,8 @@ async def send_text(
                 elif state == "stop":
                     saw_stop = True
                     print(f"[← tts/stop]")
+                    if accepted_sent and not proposal_completed:
+                        continue
                     # stop 之后稍微再等一下看还有没有
                     try:
                         msg2 = await asyncio.wait_for(ws.recv(), timeout=2)
@@ -104,7 +108,10 @@ async def send_text(
                     print(f"[← proposal/{state}] {json.dumps(obj, ensure_ascii=False)[:300]}")
                     if state == "pending" and decision in {"accept", "reject"}:
                         await ws.send(json.dumps({"type": decision}))
+                        accepted_sent = decision == "accept"
                         print(f"[→] {decision}")
+                    if state == "completed":
+                        proposal_completed = True
                     continue
                 print(f"[← {mtype}] {json.dumps(obj, ensure_ascii=False)[:200]}")
 
