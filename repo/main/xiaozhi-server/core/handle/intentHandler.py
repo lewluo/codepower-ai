@@ -19,21 +19,21 @@ from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
 TAG = __name__
 DIRECT_HERMES_ALIAS_RE = re.compile(r"(hermes|hummus|赫尔墨斯|赫耳墨斯)", re.IGNORECASE)
 DIRECT_HERMES_REQUEST_RE = re.compile(
-    r"(用|让|叫|请让|请叫|交给|麻烦|帮我让|帮我叫|帮我用|由).{0,8}(hermes|hummus|赫尔墨斯|赫耳墨斯)",
+    r"^(请)?(你)?(帮我)?(让|叫|请让|请叫|交给|麻烦|由|安排给).{0,8}(hermes|hummus|赫尔墨斯|赫耳墨斯)",
     re.IGNORECASE,
 )
 DIRECT_OPENCLAW_ALIAS_RE = re.compile(r"(open\s*claw|openclaw|欧喷克劳)", re.IGNORECASE)
 DIRECT_OPENCLAW_REQUEST_RE = re.compile(
-    r"(用|让|叫|请让|请叫|交给|麻烦|帮我让|帮我叫|帮我用|由).{0,8}(open\s*claw|openclaw|欧喷克劳)",
+    r"^(请)?(你)?(帮我)?(让|叫|请让|请叫|交给|麻烦|由|安排给).{0,8}(open\s*claw|openclaw|欧喷克劳)",
     re.IGNORECASE,
 )
-OPENCLAW_AGENT_ALIASES = {
-    "planner": ["planner", "规划师", "计划", "规划"],
-    "site-ops": ["site-ops", "site ops", "运维", "站点"],
-    "support": ["support", "客服", "邮件"],
-    "overseas-dev": ["overseas-dev", "overseas dev", "出海", "海外"],
-    "designer": ["designer", "设计师", "设计"],
-    "keyword-miner": ["keyword-miner", "keyword miner", "挖词官", "挖词", "关键词"],
+DIRECT_DISPATCH_REQUEST_RE = re.compile(
+    r"^(请)?(你)?(帮我)?(派|安排|分配|让|叫|交给|麻烦安排|麻烦派)\s*",
+    re.IGNORECASE,
+)
+AGENT_ALIASES = {
+    "planner": ["planner", "规划分身", "规划师", "调度分身", "默认分身", "主任务"],
+    "executor": ["executor", "执行分身", "执行器", "执行同事"],
 }
 
 
@@ -69,6 +69,9 @@ async def handle_user_intent(conn: "ConnectionHandler", text):
         return True
 
     if await try_handle_direct_hermes_request(conn, text):
+        return True
+
+    if await try_handle_direct_dispatch_request(conn, text):
         return True
 
     if conn.intent_type == "function_call":
@@ -115,46 +118,63 @@ async def analyze_intent_with_llm(conn: "ConnectionHandler", text):
     return None
 
 
-def _normalize_direct_hermes_task(text: str) -> str:
+def _strip_assignment_prefix(text: str) -> str:
     task = text.strip()
     task = re.sub(
-        r"^(请)?(你)?(帮我)?(让|叫|请让|请叫|交给|麻烦|由)\s*(hermes|hummus|赫尔墨斯|赫耳墨斯)\s*(去|来|直接)?",
+        r"^(请)?(你)?(帮我)?(派|安排|分配|让|叫|请让|请叫|交给|麻烦|由|安排给)\s*",
         "",
         task,
         flags=re.IGNORECASE,
     ).strip()
-    task = re.sub(
-        r"^(帮我|替我|直接)\s*",
-        "",
-        task,
-        flags=re.IGNORECASE,
-    ).strip()
+    task = re.sub(r"^(去|来|直接)\s*", "", task, flags=re.IGNORECASE).strip()
+    return task
+
+
+def _strip_agent_aliases(text: str) -> str:
+    task = text
+    for aliases in AGENT_ALIASES.values():
+        for alias in aliases:
+            task = re.sub(re.escape(alias), "", task, count=1, flags=re.IGNORECASE)
+    return task
+
+
+def _infer_dispatch_agent_id(text: str) -> str:
+    lowered = text.lower()
+    for agent_id, aliases in AGENT_ALIASES.items():
+        if any(alias in lowered or alias in text for alias in aliases):
+            return agent_id
+    return "planner"
+
+
+def _normalize_direct_dispatch_task(text: str) -> str:
+    task = _strip_assignment_prefix(text)
+    task = re.sub(r"^(个|一个)?(任务|活儿|活)\s*", "", task, flags=re.IGNORECASE).strip()
+    task = _strip_agent_aliases(task)
+    task = task.lstrip(" ，,。")
+    task = re.sub(r"^(帮我|替我|直接)\s*", "", task, flags=re.IGNORECASE).strip()
+    return task or text.strip()
+
+
+def _normalize_direct_hermes_task(text: str) -> str:
+    task = _strip_assignment_prefix(text)
+    task = re.sub(DIRECT_HERMES_ALIAS_RE, "", task, count=1).strip()
+    task = re.sub(r"^(帮我|替我|直接)\s*", "", task, flags=re.IGNORECASE).strip()
     return task or text.strip()
 
 
 def _normalize_direct_openclaw_task(text: str) -> str:
-    task = text.strip()
-    task = re.sub(
-        r"^(请)?(你)?(帮我)?(让|叫|请让|请叫|交给|麻烦|由)\s*(open\s*claw|openclaw|欧喷克劳)\s*(去|来|直接)?",
-        "",
-        task,
-        flags=re.IGNORECASE,
-    ).strip()
-    task = re.sub(
-        r"^(帮我|替我|直接)\s*",
-        "",
-        task,
-        flags=re.IGNORECASE,
-    ).strip()
+    task = _strip_assignment_prefix(text)
+    task = re.sub(DIRECT_OPENCLAW_ALIAS_RE, "", task, count=1).strip()
+    task = re.sub(r"^(帮我|替我|直接)\s*", "", task, flags=re.IGNORECASE).strip()
     return task or text.strip()
 
 
 def _infer_openclaw_agent_id(text: str) -> str:
-    lowered = text.lower()
-    for agent_id, aliases in OPENCLAW_AGENT_ALIASES.items():
-        if any(alias in lowered or alias in text for alias in aliases):
-            return agent_id
-    return "planner"
+    return _infer_dispatch_agent_id(text) if any(
+        alias in text.lower() or alias in text
+        for aliases in AGENT_ALIASES.values()
+        for alias in aliases
+    ) else "default"
 
 
 async def try_handle_direct_openclaw_request(
@@ -163,10 +183,8 @@ async def try_handle_direct_openclaw_request(
     text = original_text.strip()
     if not text:
         return False
-
     if not DIRECT_OPENCLAW_ALIAS_RE.search(text):
         return False
-
     if not DIRECT_OPENCLAW_REQUEST_RE.search(text):
         return False
 
@@ -179,7 +197,6 @@ async def try_handle_direct_openclaw_request(
             ensure_ascii=False,
         ),
     }
-
     conn.logger.bind(tag=TAG).info(f"命中显式 OpenClaw 请求，直接进入确认链: {task}")
     await send_stt_message(conn, original_text)
     conn.client_abort = False
@@ -192,10 +209,8 @@ async def try_handle_direct_hermes_request(
     text = original_text.strip()
     if not text:
         return False
-
     if not DIRECT_HERMES_ALIAS_RE.search(text):
         return False
-
     if not DIRECT_HERMES_REQUEST_RE.search(text):
         return False
 
@@ -205,8 +220,37 @@ async def try_handle_direct_hermes_request(
         "id": str(uuid.uuid4().hex),
         "arguments": json.dumps({"task": task}, ensure_ascii=False),
     }
-
     conn.logger.bind(tag=TAG).info(f"命中显式 Hermes 请求，直接进入确认链: {task}")
+    await send_stt_message(conn, original_text)
+    conn.client_abort = False
+    return await stage_pending_proposal(conn, function_call_data, original_text)
+
+
+async def try_handle_direct_dispatch_request(
+    conn: "ConnectionHandler", original_text: str
+) -> bool:
+    text = original_text.strip()
+    if not text:
+        return False
+    if not DIRECT_DISPATCH_REQUEST_RE.search(text):
+        return False
+
+    task = _normalize_direct_dispatch_task(text)
+    if not task or task == text:
+        return False
+
+    function_call_data = {
+        "name": "dispatch_agent",
+        "id": str(uuid.uuid4().hex),
+        "arguments": json.dumps(
+            {
+                "agent_id": _infer_dispatch_agent_id(text),
+                "task": task,
+            },
+            ensure_ascii=False,
+        ),
+    }
+    conn.logger.bind(tag=TAG).info(f"命中显式派活请求，直接进入确认链: {task}")
     await send_stt_message(conn, original_text)
     conn.client_abort = False
     return await stage_pending_proposal(conn, function_call_data, original_text)

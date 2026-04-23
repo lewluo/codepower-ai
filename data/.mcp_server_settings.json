@@ -1,21 +1,9 @@
 {
   "mcpServers": {
-    "openclaw-dispatcher": {
+    "codepower-dispatcher": {
       "url": "http://127.0.0.1:9001/mcp",
       "transport": "streamable-http",
       "headers": {}
-    },
-    "openclaw-local": {
-      "command": "openclaw",
-      "args": [
-        "mcp",
-        "serve",
-        "--url",
-        "ws://127.0.0.1:18789",
-        "--claude-channel-mode",
-        "off"
-      ],
-      "env": {}
     }
   }
 }

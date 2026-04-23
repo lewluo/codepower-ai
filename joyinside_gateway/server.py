@@ -20,22 +20,21 @@ if str(ROOT) not in sys.path:
 from dispatcher.server import (  # noqa: E402
     dispatch_agent,
     list_agents,
+    list_agent_backends,
+    hermes_repo_task,
     openclaw_agent_task,
     query_agent_status,
     read_daily_report,
 )
 
 SERVICE_TOKEN = os.environ.get("JOYINSIDE_SERVICE_TOKEN", "")
-
+DEFAULT_AGENT_ID = os.environ.get("CODEPOWER_DEFAULT_AGENT") or "planner"
 AGENT_ALIASES = {
-    "main": ["main", "主力", "默认"],
-    "planner": ["planner", "规划师", "计划", "规划"],
-    "site-ops": ["site-ops", "site ops", "运维", "站点"],
-    "support": ["support", "客服", "邮件"],
-    "overseas-dev": ["overseas-dev", "overseas dev", "出海", "海外"],
-    "designer": ["designer", "设计师", "设计"],
-    "keyword-miner": ["keyword-miner", "keyword miner", "挖词官", "挖词", "关键词"],
+    "planner": ["planner", "规划分身", "规划师", "调度分身", "默认分身", "主任务"],
+    "executor": ["executor", "执行分身", "执行器", "执行同事"],
 }
+DIRECT_HERMES_ALIAS_RE = re.compile(r"(hermes|hummus|赫尔墨斯|赫耳墨斯)", re.IGNORECASE)
+DIRECT_OPENCLAW_ALIAS_RE = re.compile(r"(open\s*claw|openclaw|欧喷克劳)", re.IGNORECASE)
 
 
 def _authorized(request: Request) -> bool:
@@ -74,11 +73,15 @@ def _infer_tool(text: str, explicit: str | None) -> str:
     lowered = text.lower()
     if any(word in text for word in ["有哪些", "能派谁", "可用", "分身"]) or "agent" in lowered:
         return "list_agents"
+    if any(word in text for word in ["后端", "backends", "backend"]):
+        return "list_agent_backends"
     if any(word in text for word in ["日报", "今天干了啥", "昨天干了啥"]):
         return "read_daily_report"
     if any(word in text for word in ["刚才", "好了没", "搞定", "状态", "进展"]):
         return "query_agent_status"
-    if "openclaw" in lowered or "open claw" in lowered or "欧喷克劳" in text:
+    if DIRECT_HERMES_ALIAS_RE.search(text):
+        return "hermes_repo_task"
+    if DIRECT_OPENCLAW_ALIAS_RE.search(text):
         return "openclaw_agent_task"
     return "dispatch_agent"
 
@@ -99,7 +102,7 @@ def _infer_agent_and_task(text: str, params: dict[str, Any]) -> tuple[str, str]:
     agent_id = params.get("agent_id")
     if not isinstance(agent_id, str) or not agent_id:
         lowered = text.lower()
-        agent_id = "main"
+        agent_id = DEFAULT_AGENT_ID
         for candidate, aliases in AGENT_ALIASES.items():
             if any(alias in lowered or alias in text for alias in aliases):
                 agent_id = candidate
@@ -108,16 +111,30 @@ def _infer_agent_and_task(text: str, params: dict[str, Any]) -> tuple[str, str]:
     task = params.get("task")
     if not isinstance(task, str) or not task:
         task = text
-        for alias in AGENT_ALIASES.get(agent_id, []):
-            task = re.sub(re.escape(alias), "", task, flags=re.IGNORECASE)
-        task = re.sub(r"^(派|让|叫|请|帮我|帮忙|去|做|查|看)+", "", task).strip(" ，,。")
+        for aliases in AGENT_ALIASES.values():
+            for alias in aliases:
+                task = re.sub(re.escape(alias), "", task, flags=re.IGNORECASE)
+        task = re.sub(r"^(个|一个)?(任务|活儿|活)\s*", "", task, flags=re.IGNORECASE)
+        task = task.lstrip(" ，,。")
+        task = re.sub(
+            r"^(请)?(你)?(帮我)?(派|安排|分配|让|叫|交给|麻烦|去|做|查|看)+",
+            "",
+            task,
+            flags=re.IGNORECASE,
+        ).strip(" ，,。")
     return agent_id, task or text or "请处理用户请求。"
+
+
+def _strip_backend_alias(task: str, pattern: re.Pattern[str]) -> str:
+    return re.sub(pattern, "", task, count=1).strip(" ，,。") or task
 
 
 async def _run_tool(tool: str, params: dict[str, Any]) -> str:
     text = _input_text(params)
     if tool == "list_agents":
         return await list_agents()
+    if tool == "list_agent_backends":
+        return await list_agent_backends()
     if tool == "read_daily_report":
         return await read_daily_report(_infer_date(text, params))
     if tool == "query_agent_status":
@@ -125,8 +142,13 @@ async def _run_tool(tool: str, params: dict[str, Any]) -> str:
     if tool == "dispatch_agent":
         agent_id, task = _infer_agent_and_task(text, params)
         return await dispatch_agent(agent_id, task)
+    if tool == "hermes_repo_task":
+        _, task = _infer_agent_and_task(text, params)
+        task = _strip_backend_alias(task, DIRECT_HERMES_ALIAS_RE)
+        return await hermes_repo_task(task)
     if tool == "openclaw_agent_task":
         agent_id, task = _infer_agent_and_task(text, params)
+        task = _strip_backend_alias(task, DIRECT_OPENCLAW_ALIAS_RE)
         return await openclaw_agent_task(agent_id, task)
     return f"未知工具: {tool}"
 

@@ -1,15 +1,15 @@
 """
-OpenClaw Dispatcher — 小智语音的后端工具服务
-架构: 小智(Docker) → streamable-http MCP → 本服务(host:9000) → Hermes / OpenClaw Gateway / Codex / Claude Code
+CodePower Dispatcher — 小智语音的后端工具服务
+架构: 小智(Docker) → streamable-http MCP → 本服务(host:9000) → 可配置任务后端 / Codex / Claude Code
 
 工具:
   list_agents()                    - 列出可用 agent
   list_agent_backends()            - 列出可用任务后端
   dispatch_agent(agent_id, task)   - 按配置派发任务
-  openclaw_agent_task(...)         - 调完整 OpenClaw Gateway agent
+  openclaw_agent_task(...)         - 可选: 调完整 OpenClaw Gateway agent
   query_agent_status()             - 查询最近一次派发状态
   read_daily_report(date='today')  - 读 OpenClaw 日报
-  hermes_repo_task(task)           - 调 Hermes 在专用工作目录执行仓库任务
+  hermes_repo_task(task)           - 可选: 调 Hermes 在专用工作目录执行仓库任务
   run_codex(task, ...)             - 调本机 Codex CLI
   run_claude_code(task, ...)       - 调本机 Claude Code CLI
 """
@@ -76,15 +76,16 @@ HERMES_TIMEOUT_SEC = 600         # 10 分钟
 HERMES_REPO_TIMEOUT_SEC = 600
 OPENCLAW_AGENT_TIMEOUT_SEC = int(os.environ.get("CODEPOWER_OPENCLAW_AGENT_TIMEOUT_SEC", "600"))
 OPENCLAW_AGENT_LIST_TIMEOUT_SEC = int(os.environ.get("CODEPOWER_OPENCLAW_AGENT_LIST_TIMEOUT_SEC", "8"))
-OPENCLAW_DEFAULT_AGENT_ID = os.environ.get("CODEPOWER_OPENCLAW_DEFAULT_AGENT", "planner")
-OPENCLAW_AGENTS_CONFIG = os.environ.get("CODEPOWER_OPENCLAW_AGENTS", "")
+OPENCLAW_DEFAULT_AGENT_ID = os.environ.get("CODEPOWER_OPENCLAW_DEFAULT_AGENT") or "planner"
+AGENT_DEFAULT_ID = os.environ.get("CODEPOWER_DEFAULT_AGENT") or "planner"
+AGENT_REGISTRY_CONFIG = os.environ.get("CODEPOWER_AGENT_REGISTRY", "")
 OPENCLAW_THINKING = os.environ.get("CODEPOWER_OPENCLAW_THINKING", "")
 OPENCLAW_GATEWAY_URL = os.environ.get("CODEPOWER_OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789")
 OPENCLAW_LITE_TIMEOUT_SEC = int(os.environ.get("CODEPOWER_OPENCLAW_LITE_TIMEOUT_SEC", "300"))
-AGENT_BACKEND = os.environ.get("CODEPOWER_AGENT_BACKEND", "openclaw")
+AGENT_BACKEND = os.environ.get("CODEPOWER_AGENT_BACKEND") or "hermes"
 AGENT_BACKENDS = tuple(
     item.strip().lower()
-    for item in os.environ.get("CODEPOWER_AGENT_BACKENDS", "openclaw,hermes").split(",")
+    for item in (os.environ.get("CODEPOWER_AGENT_BACKENDS") or "hermes,openclaw").split(",")
     if item.strip()
 )
 AGENT_FALLBACK_BACKENDS = tuple(
@@ -128,9 +129,13 @@ JOYINSIDE_DEVICE_NAME = os.environ.get("JOYINSIDE_DEVICE_NAME", "CodePower-Local
 JOYINSIDE_UID = os.environ.get("JOYINSIDE_UID", "codepower-local-user")
 _JOYINSIDE_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
 
-mcp = FastMCP("openclaw-dispatcher")
+mcp = FastMCP("codepower-dispatcher")
 _OPENCLAW_AGENTS_CACHE: tuple[float, dict] = (0.0, {})
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+_BUILTIN_AGENT_ROLES = {
+    "planner": "任务规划、分派与协调",
+    "executor": "通用任务执行与结果整理",
+}
 
 
 def _parse_first_json_value(text: str):
@@ -153,9 +158,16 @@ def _load_lite_agents() -> dict:
         return json.load(f).get("agents", {})
 
 
-def _load_configured_openclaw_agents() -> dict:
+def _enabled_backend_names() -> set[str]:
+    names = {_normalize_backend(item) for item in AGENT_BACKENDS}
+    if AGENT_BACKEND:
+        names.add(_normalize_backend(AGENT_BACKEND))
+    return {item for item in names if item}
+
+
+def _load_configured_agents() -> dict:
     agents: dict[str, dict] = {}
-    for item in OPENCLAW_AGENTS_CONFIG.split(","):
+    for item in AGENT_REGISTRY_CONFIG.split(","):
         raw = item.strip()
         if not raw:
             continue
@@ -174,17 +186,28 @@ def _load_configured_openclaw_agents() -> dict:
             "emoji": "",
             "workspace": "",
             "model": "",
-            "is_default": agent_id == OPENCLAW_DEFAULT_AGENT_ID,
-            "source": "openclaw_config",
+            "is_default": agent_id == AGENT_DEFAULT_ID,
+            "source": "config",
+        }
+    return agents
+
+
+def _load_builtin_agents() -> dict:
+    agents: dict[str, dict] = {}
+    for agent_id, role in _BUILTIN_AGENT_ROLES.items():
+        agents[agent_id] = {
+            "role": role,
+            "emoji": "",
+            "workspace": "",
+            "model": "",
+            "is_default": agent_id == AGENT_DEFAULT_ID,
+            "source": "builtin",
         }
     return agents
 
 
 def _load_openclaw_agents() -> dict:
     global _OPENCLAW_AGENTS_CACHE
-    configured = _load_configured_openclaw_agents()
-    if configured:
-        return configured
     cached_at, cached = _OPENCLAW_AGENTS_CACHE
     if cached and time.time() - cached_at < 60:
         return cached
@@ -227,13 +250,10 @@ def _load_openclaw_agents() -> dict:
 
 
 def _load_agent_registry() -> tuple[dict, str]:
-    agents = _load_openclaw_agents()
+    agents = _load_configured_agents()
     if agents:
-        return agents, "openclaw"
-    agents = _load_lite_agents()
-    if agents:
-        return agents, "openclaw_lite"
-    return {}, ""
+        return agents, "config"
+    return _load_builtin_agents(), "builtin"
 
 
 def _load_agents() -> dict:
@@ -653,11 +673,16 @@ def _joyinside_chat_sync(input: str, session_id: str = "codepower-tool") -> str:
 
 @mcp.tool()
 async def list_agents() -> str:
-    """列出所有可用的 OpenClaw agent 及其角色职责。在用户问"有哪些 agent"时调用。优先读取完整 OpenClaw Gateway。"""
+    """列出所有已配置 agent 及其角色职责。在用户问"有哪些 agent"时调用。"""
     agents, source = _load_agent_registry()
     if not agents:
-        return "未找到 OpenClaw agent。请确认 openclaw CLI/Gateway 已安装并运行。"
-    source_name = "OpenClaw Gateway" if source == "openclaw" else "OpenClaw Lite"
+        return "未配置 agent。请在 CODEPOWER_AGENT_REGISTRY 中配置 agent 清单,或启用一个任务后端。"
+    source_name = {
+        "config": "配置",
+        "builtin": "内置默认",
+        "openclaw": "OpenClaw Gateway",
+        "openclaw_lite": "OpenClaw Lite",
+    }.get(source, source or "配置")
     lines = [f"{source_name} 共有 {len(agents)} 个 agent:"]
     for aid, a in agents.items():
         default_mark = "（默认）" if a.get("is_default") else ""
@@ -680,10 +705,12 @@ def _normalize_backend(backend: str) -> str:
 
 
 def _resolve_agent_backends(requested: str = "") -> list[str]:
-    enabled = [_normalize_backend(item) for item in AGENT_BACKENDS] or ["openclaw"]
-    primary = _normalize_backend(requested or AGENT_BACKEND or enabled[0])
+    enabled = [_normalize_backend(item) for item in AGENT_BACKENDS]
+    primary = _normalize_backend(requested or AGENT_BACKEND or (enabled[0] if enabled else ""))
     if primary == "auto":
-        primary = enabled[0]
+        primary = enabled[0] if enabled else ""
+    if not primary:
+        return []
     if requested:
         return [primary]
     backends = [primary]
@@ -692,18 +719,26 @@ def _resolve_agent_backends(requested: str = "") -> list[str]:
     for item in backends:
         if not item or item in resolved:
             continue
-        if item not in enabled and requested:
+        if enabled and item not in enabled:
             continue
         resolved.append(item)
-    return resolved or enabled
+    return resolved
 
 
 def _resolve_agent_id(agent_id: str, agents: dict) -> tuple[str, str]:
     requested = (agent_id or "").strip()
     if requested in agents:
         return requested, ""
-    if requested in {"", "main", "default", "默认", "主力"} and OPENCLAW_DEFAULT_AGENT_ID in agents:
-        return OPENCLAW_DEFAULT_AGENT_ID, f"agent '{requested or 'default'}' 已映射到 OpenClaw 默认 agent '{OPENCLAW_DEFAULT_AGENT_ID}'。"
+    if requested in {"", "main", "default", "默认", "主力"}:
+        default_id = (AGENT_DEFAULT_ID or "").strip()
+        if default_id and default_id in agents:
+            return default_id, f"agent '{requested or 'default'}' 已映射到默认 agent '{default_id}'。"
+        for aid, agent in agents.items():
+            if agent.get("is_default"):
+                return aid, f"agent '{requested or 'default'}' 已映射到默认 agent '{aid}'。"
+        if len(agents) == 1:
+            only_agent = next(iter(agents.keys()))
+            return only_agent, f"agent '{requested or 'default'}' 已映射到唯一 agent '{only_agent}'。"
     return requested, ""
 
 
@@ -758,34 +793,44 @@ async def _run_agent_backend(
 
 @mcp.tool()
 async def list_agent_backends() -> str:
-    """列出当前可用的任务执行后端。用户问"Hermes/OpenClaw 怎么配置"时调用。"""
+    """列出当前配置的任务执行后端。用户问"后端怎么配置"时调用。"""
+    enabled = [_normalize_backend(item) for item in AGENT_BACKENDS]
     lines = [
-        f"默认后端: {_normalize_backend(AGENT_BACKEND)}",
-        f"启用后端: {', '.join(_normalize_backend(item) for item in AGENT_BACKENDS) or '无'}",
+        f"默认后端: {_normalize_backend(AGENT_BACKEND) or '未配置'}",
+        f"启用后端: {', '.join(enabled) or '未配置'}",
         f"失败兜底: {', '.join(_normalize_backend(item) for item in AGENT_FALLBACK_BACKENDS) or '未启用'}",
-        f"OpenClaw CLI: {OPENCLAW or 'MISSING'}",
-        f"OpenClaw Gateway: {OPENCLAW_GATEWAY_URL}",
-        f"Hermes CLI: {HERMES if HERMES.exists() else 'MISSING'}",
-        f"OpenClaw Lite dispatch.sh: {DISPATCH_SH if DISPATCH_SH.exists() else 'MISSING'}",
+        f"agent 清单: {'已配置' if AGENT_REGISTRY_CONFIG else '内置默认'}",
     ]
+    if "openclaw" in enabled:
+        lines.append(f"OpenClaw CLI: {OPENCLAW or 'MISSING'}")
+        lines.append(f"OpenClaw Gateway: {OPENCLAW_GATEWAY_URL}")
+    if "hermes" in enabled:
+        lines.append(f"Hermes CLI: {HERMES if HERMES.exists() else 'MISSING'}")
+    if "openclaw_lite" in enabled:
+        lines.append(f"OpenClaw Lite dispatch.sh: {DISPATCH_SH if DISPATCH_SH.exists() else 'MISSING'}")
     return "\n".join(lines)
 
 
 @mcp.tool()
 async def dispatch_agent(agent_id: str, task: str, backend: str = "") -> str:
-    """派发一个任务给指定 agent 执行。默认后端由 CODEPOWER_AGENT_BACKEND 配置,OpenClaw 与 Hermes 独立存在。
+    """派发一个任务给指定 agent 执行。默认后端由 CODEPOWER_AGENT_BACKEND 配置。
 
     参数:
-      agent_id: OpenClaw agent id,例如 planner / site-ops / support / overseas-dev / designer / keyword-miner
-      task: 任务描述(自然语言,例如"查今天日报" / "看看 bazi 站点状态")
-      backend: 可选。openclaw / hermes / openclaw_lite。为空时走 CODEPOWER_AGENT_BACKEND。
+      agent_id: 已配置 agent id。先调用 list_agents 查看可用值。
+      task: 任务描述(自然语言)。
+      backend: 可选。为空时走 CODEPOWER_AGENT_BACKEND。
 
     返回: 执行结果文本(简短,可直接给用户听)
     """
     agents = _load_agents()
+    if not agents:
+        return "未配置 agent 清单。请设置 CODEPOWER_AGENT_REGISTRY,或启用能自动发现 agent 的任务后端。"
     agent_id, alias_note = _resolve_agent_id(agent_id, agents)
     if agent_id not in agents:
         return f"agent '{agent_id}' 不存在。可用: {', '.join(agents.keys())}"
+    backends = _resolve_agent_backends(backend)
+    if not backends:
+        return "未配置任务后端。请设置 CODEPOWER_AGENT_BACKEND 或显式传入 backend。"
 
     run_id = f"run_{int(time.time())}"
     started = datetime.now().isoformat(timespec="seconds")
@@ -807,7 +852,7 @@ async def dispatch_agent(agent_id: str, task: str, backend: str = "") -> str:
     result = ""
     backend_used = ""
     failures: list[str] = []
-    for candidate in _resolve_agent_backends(backend):
+    for candidate in backends:
         ok, result, backend_used = await _run_agent_backend(
             backend=candidate,
             agent_id=agent_id,
@@ -889,7 +934,13 @@ async def openclaw_agent_task(agent_id: str = "", task: str = "", wait: bool = F
     if not task.strip():
         return "OpenClaw 任务为空。"
     if wait:
-        return await dispatch_agent(resolved_agent_id, task, backend="openclaw")
+        ok, result = await _run_openclaw_agent(
+            resolved_agent_id,
+            f"{task}\n\n请简短作答(150 字内),能直接被语音播报。",
+            OPENCLAW_AGENT_TIMEOUT_SEC,
+        )
+        prefix = "[openclaw 已完成]" if ok else "[openclaw 失败]"
+        return f"{prefix} {result}"
 
     run_id = f"run_{int(time.time())}"
     worker_id = f"dispatch_{resolved_agent_id}_openclaw"
@@ -1355,18 +1406,22 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9000"))
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[dispatcher] MCP streamable-http on 0.0.0.0:{port}/mcp")
-    if OPENCLAW_AGENTS_CONFIG:
-        agents = _load_configured_openclaw_agents()
-        print(f"[dispatcher] agents(openclaw_config): {list(agents.keys())}")
+    enabled = [_normalize_backend(item) for item in AGENT_BACKENDS]
+    if AGENT_REGISTRY_CONFIG:
+        agents = _load_configured_agents()
+        print(f"[dispatcher] agents(config): {list(agents.keys())}")
     else:
-        print("[dispatcher] agents: lazy load via list_agents/openclaw_agent_task")
-    print(f"[dispatcher] agent backend default: {_normalize_backend(AGENT_BACKEND)}")
-    print(f"[dispatcher] agent backends enabled: {', '.join(_normalize_backend(item) for item in AGENT_BACKENDS)}")
-    print(f"[dispatcher] openclaw: {OPENCLAW or 'MISSING'}")
-    print(f"[dispatcher] openclaw gateway: {OPENCLAW_GATEWAY_URL}")
-    print(f"[dispatcher] hermes: {HERMES} ({'ok' if HERMES.exists() else 'MISSING'})")
-    print(f"[dispatcher] hermes workspace: {WORKSPACE_DIR}")
-    print(f"[dispatcher] openclaw lite dispatch.sh: {DISPATCH_SH} ({'ok' if DISPATCH_SH.exists() else 'MISSING'})")
+        print("[dispatcher] agents: not configured")
+    print(f"[dispatcher] agent backend default: {_normalize_backend(AGENT_BACKEND) or 'not configured'}")
+    print(f"[dispatcher] agent backends enabled: {', '.join(enabled) or 'not configured'}")
+    if "openclaw" in enabled:
+        print(f"[dispatcher] openclaw: {OPENCLAW or 'MISSING'}")
+        print(f"[dispatcher] openclaw gateway: {OPENCLAW_GATEWAY_URL}")
+    if "hermes" in enabled:
+        print(f"[dispatcher] hermes: {HERMES} ({'ok' if HERMES.exists() else 'MISSING'})")
+        print(f"[dispatcher] hermes workspace: {WORKSPACE_DIR}")
+    if "openclaw_lite" in enabled:
+        print(f"[dispatcher] openclaw lite dispatch.sh: {DISPATCH_SH} ({'ok' if DISPATCH_SH.exists() else 'MISSING'})")
     print(f"[dispatcher] codex: {CODEX or 'MISSING'}")
     print(f"[dispatcher] claude: {CLAUDE or 'MISSING'}")
     # FastMCP streamable-http 默认路径 /mcp,端口通过 settings

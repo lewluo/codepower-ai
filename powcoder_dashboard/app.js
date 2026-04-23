@@ -18,7 +18,6 @@ const els = {
   proposalTask: document.getElementById('proposalTask'),
   chatList: document.getElementById('chatList'),
   agentGrid: document.getElementById('agentGrid'),
-  workflowSteps: document.getElementById('workflowSteps'),
   sessionList: document.getElementById('sessionList'),
 };
 
@@ -39,12 +38,12 @@ const statusText = {
 
 const demoPresets = {
   '帮我总结今天的项目进度': {
-    agent: 'planner',
+    agent: 'dispatcher',
     reply: '好的，正在为你整理项目进度摘要：今天完成了终端展示初版、Agent 面板和语音交互逻辑。',
     logs: [
       ['blue', '◉', '识别语音：帮我总结今天的项目进度'],
-      ['purple', '机', 'dispatcher 路由至 Planner'],
-      ['purple', '网', 'Planner：聚合任务信息'],
+      ['purple', '机', 'dispatcher 路由至任务后端'],
+      ['purple', '网', '任务后端：聚合任务信息'],
       ['green', '✓', '总结结果已返回 JoyInside'],
     ],
   },
@@ -71,13 +70,13 @@ const demoPresets = {
 };
 
 const defaultAgents = [
-  { id: 'joyinside', name: 'JoyInside', icon: '☺', color: '#5d89ff', desc: '闲聊、语音互动与陪伴式回复' },
-  { id: 'dispatcher', name: 'Dispatcher', icon: '⟲', color: '#7d67f7', desc: '任务分发、确认和工具路由' },
-  { id: 'openclaw', name: 'OpenClaw', icon: '⌁', color: '#1f6feb', desc: '本机 OpenClaw Gateway 与 MCP 能力' },
-  { id: 'hermes', name: 'Hermes', icon: '∞', color: '#111111', desc: '独立 Hermes 工程任务后端' },
-  { id: 'codex', name: 'Codex', icon: '⌘', color: '#40c47a', desc: '代码阅读、修改与验证' },
-  { id: 'claude_code', name: 'Claude Code', icon: '◇', color: '#c98520', desc: '备用代码执行通道' },
-  { id: 'visual', name: 'Visual Service', icon: '◔', color: '#4b77ff', desc: '可视化状态页与执行效果展示' },
+  { id: 'joyinside', mode: 'chat', name: 'JoyInside', icon: '☺', color: '#3867ff', desc: '闲聊、语音互动与陪伴式回复' },
+  { id: 'dispatcher', mode: 'task', name: 'Task Router', icon: '⟲', color: '#7d67f7', desc: '任务分发、确认和工具路由' },
+  { id: 'hermes', mode: 'task', name: 'Hermes', icon: '∞', color: '#111111', desc: '默认任务后端，承接工程执行与结果整理' },
+  { id: 'openclaw', mode: 'task', name: 'OpenClaw', icon: '⌁', color: '#1f6feb', desc: '备用任务后端，可显式接管本机 Agent 任务' },
+  { id: 'codex', mode: 'task', name: 'Codex', icon: '⌘', color: '#2d9f6d', desc: '代码阅读、修改与验证' },
+  { id: 'claude_code', mode: 'task', name: 'Claude Code', icon: '◇', color: '#b36a16', desc: '备用代码执行通道' },
+  { id: 'visual', mode: 'task', name: 'Visual Service', icon: '◔', color: '#4b77ff', desc: '可视化状态页与执行效果展示' },
 ];
 
 let lastState = null;
@@ -140,7 +139,7 @@ function isWorking(state) {
 
 function isSpeaking(state) {
   const chat = state?.chat || {};
-  return chat.status === 'serving' || isWorking(state);
+  return chat.status === 'serving';
 }
 
 function setModeToggle(mode) {
@@ -156,13 +155,14 @@ function renderConnection(state) {
   const mode = state.mode || 'idle';
   const provider = state.chat?.provider || (mode === 'chat' ? 'JoyInside' : 'PowCoder');
   const device = connection.device_id ? ` · ${connection.device_id}` : '';
+  const modeLabel = mode === 'chat' ? 'JoyInside 闲聊' : mode === 'task' ? 'GPT 任务' : mode;
 
   els.connectionPill.className = `status-pill ${working ? 'working' : connectionStatus === 'connected' ? 'online' : 'offline'}`;
   els.connectionText.textContent = `${working ? '执行中' : statusLabel(connectionStatus)}${device}`;
   els.updatedText.textContent = `更新 ${formatTime(state.updated_at)}`;
-  els.modeTag.textContent = `mode: ${mode}`;
+  els.modeTag.textContent = `mode: ${modeLabel}`;
   els.providerTag.textContent = `provider: ${provider}`;
-  els.taskTag.textContent = `task: ${state.active_task_id || statusLabel(state.proposal?.state)}`;
+  els.taskTag.textContent = `task: ${state.active_task_id || (mode === 'task' ? 'waiting' : statusLabel(state.proposal?.state))}`;
   els.terminalStatus.className = `status-pill subtle-dark ${working ? 'working' : 'online'}`;
   els.terminalStatus.innerHTML = `<span class="dot"></span>${working ? '执行中' : '在线'}`;
   setModeToggle(mode);
@@ -176,9 +176,19 @@ function renderHero(state) {
   } else if (isWorking(state)) {
     const task = state.proposal?.task || state.workers?.[0]?.task || state.active_task_id || '当前任务';
     els.heroDesc.textContent = `PowCoder 正在执行任务：${short(task, '当前任务', 120)}`;
+  } else if (mode === 'task') {
+    els.heroDesc.textContent = '当前已切到 GPT 任务模式。Hermes 默认待命，OpenClaw 可显式接手，页面会同步展示派活、确认和执行状态。';
   } else {
-    els.heroDesc.textContent = 'PowCoder 是一款面向 Web 4.0 时代的 AI Agent 终端。页面聚焦展示设备在线状态、语音对话、终端输出与 Agent 协作效果。';
+    els.heroDesc.textContent = 'PowCoder 用一个页面同时展示闲聊模式和任务模式，方便你在真实硬件接入后观察对话、调度和执行效果。';
   }
+}
+
+function titleCaseId(value) {
+  return String(value || '')
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Task Worker';
 }
 
 function eventToTerminalLine(event) {
@@ -266,8 +276,9 @@ function renderChat(state) {
   }
 
   const speaking = isSpeaking(state);
+  const working = isWorking(state);
   els.voiceCard.classList.toggle('is-speaking', speaking);
-  els.voiceStatusText.textContent = speaking ? (isWorking(state) ? '任务执行中' : '语音输入中') : statusLabel(chat.status || 'idle');
+  els.voiceStatusText.textContent = speaking ? '语音播放中' : working ? '任务执行中' : statusLabel(chat.status || 'idle');
   els.chatList.innerHTML = messages.slice(-6).map((message, index, arr) => `
     <div class="chat-item">
       <div class="chat-avatar ${message.type === 'agent' ? 'agent' : ''}">${message.type === 'agent' ? '☺' : '人'}</div>
@@ -293,12 +304,13 @@ function renderProposal(state) {
 function normalizeWorkerAgent(worker) {
   const rawId = String(worker.worker_id || worker.kind || worker.display_name || '').toLowerCase();
   if (rawId.includes('joyinside')) return 'joyinside';
-  if (rawId.includes('codex')) return 'codex';
-  if (rawId.includes('claude')) return 'claude_code';
   if (rawId.includes('openclaw')) return 'openclaw';
   if (rawId.includes('hermes')) return 'hermes';
+  if (rawId.includes('codex')) return 'codex';
+  if (rawId.includes('claude')) return 'claude_code';
   if (rawId.includes('visual')) return 'visual';
-  return 'dispatcher';
+  if (rawId.includes('dispatcher')) return 'dispatcher';
+  return rawId.replace(/[^a-z0-9_-]+/g, '_') || 'task_backend';
 }
 
 function mergedAgents(state) {
@@ -313,13 +325,19 @@ function mergedAgents(state) {
     joyinside.desc = short(chat.last_user_text || chat.last_assistant_text, joyinside.desc, 120);
   }
 
+  if (state.mode === 'task') {
+    const dispatcher = agents.get('dispatcher');
+    dispatcher.desc = short(state.proposal?.proposal_text || '任务模式已就绪，等待派活或确认。', dispatcher.desc, 120);
+  }
+
   for (const worker of workers) {
     const id = normalizeWorkerAgent(worker);
     const current = agents.get(id) || {
       id,
-      name: worker.display_name || worker.kind || id,
+      mode: 'task',
+      name: worker.display_name || titleCaseId(worker.kind || id),
       icon: '机',
-      color: '#7966ff',
+      color: '#5b6d92',
       desc: '',
       status: '就绪',
       active: false,
@@ -346,10 +364,8 @@ function mergedAgents(state) {
   return Array.from(agents.values());
 }
 
-function renderAgents(state) {
-  const agents = mergedAgents(state);
-  els.agentGrid.classList.toggle('has-active', agents.some((agent) => agent.active));
-  els.agentGrid.innerHTML = agents.map((agent) => `
+function agentCardHtml(agent) {
+  return `
     <button class="agent-card ${agent.active ? 'active' : ''} ${agent.failed ? 'failed' : ''}" type="button" data-agent="${escapeHtml(agent.id)}" aria-pressed="${agent.active ? 'true' : 'false'}">
       <div class="agent-card-head">
         <div class="agent-icon" style="background:${escapeHtml(agent.color)}">${escapeHtml(agent.icon)}</div>
@@ -360,7 +376,40 @@ function renderAgents(state) {
       </div>
       <div class="agent-desc">${escapeHtml(agent.desc || '随时待命')}</div>
     </button>
-  `).join('');
+  `;
+}
+
+function renderAgents(state) {
+  const agents = mergedAgents(state);
+  const chatAgents = agents.filter((agent) => agent.mode === 'chat');
+  const taskAgents = agents.filter((agent) => agent.mode !== 'chat');
+  const chatActive = chatAgents.some((agent) => agent.active);
+  const taskActive = taskAgents.some((agent) => agent.active);
+  const chatCurrent = state.mode === 'chat';
+  const taskCurrent = state.mode === 'task';
+  els.agentGrid.classList.toggle('has-active', chatActive || taskActive);
+  els.agentGrid.innerHTML = `
+    <section class="agent-mode-column chat-mode ${chatCurrent ? 'is-current' : ''} ${chatActive ? 'is-active' : ''}" aria-label="闲聊模式">
+      <div class="agent-mode-head">
+        <div>
+          <div class="agent-mode-kicker">Chat Mode</div>
+          <h3>闲聊模式</h3>
+        </div>
+        <span class="mode-state">${chatActive ? '工作中' : chatCurrent ? '当前模式' : '待命'}</span>
+      </div>
+      <div class="agent-stack">${chatAgents.map(agentCardHtml).join('')}</div>
+    </section>
+    <section class="agent-mode-column task-mode ${taskCurrent ? 'is-current' : ''} ${taskActive ? 'is-active' : ''}" aria-label="任务模式">
+      <div class="agent-mode-head">
+        <div>
+          <div class="agent-mode-kicker">Task Mode</div>
+          <h3>任务模式</h3>
+        </div>
+        <span class="mode-state">${taskActive ? '工作中' : taskCurrent ? '当前模式' : '待命'}</span>
+      </div>
+      <div class="agent-stack task-stack">${taskAgents.map(agentCardHtml).join('')}</div>
+    </section>
+  `;
 
   els.agentGrid.querySelectorAll('.agent-card').forEach((button) => {
     button.addEventListener('click', () => {
@@ -376,34 +425,8 @@ function renderPageState(state) {
   const working = isWorking(state);
   document.body.classList.toggle('is-working', working);
   document.body.classList.toggle('is-chatting', !working && state?.mode === 'chat');
-}
-
-function renderWorkflow(state) {
-  const connection = state.connection || {};
-  const proposal = state.proposal || {};
-  const workers = state.workers || [];
-  const hasUserText = Boolean(state.last_user_text || state.chat?.last_user_text);
-  const hasAssistantText = Boolean(state.last_assistant_text || state.chat?.last_assistant_text);
-  const hasRunningWorker = workers.some((worker) => ['pending', 'accepted', 'running'].includes(worker.status));
-  const hasFailedWorker = workers.some((worker) => worker.status === 'failed');
-
-  const steps = [
-    { icon: '🎙', title: '语音输入', desc: hasUserText ? short(state.last_user_text || state.chat?.last_user_text, '', 42) : '用户发起语音请求', state: hasUserText ? 'done' : 'idle' },
-    { icon: '〰', title: 'xiaozhi-server', desc: connection.status === 'connected' ? '设备连接中' : statusLabel(connection.status || 'offline'), state: connection.status === 'connected' ? 'done' : 'idle' },
-    { icon: '⟲', title: 'dispatcher', desc: proposal.state === 'pending' ? '等待确认' : '任务分发与路由', state: proposal.state === 'pending' ? 'active' : isWorking(state) ? 'done' : 'idle' },
-    { icon: '🤖', title: 'Agent 执行', desc: hasRunningWorker ? '多 Agent 协同处理中' : hasFailedWorker ? '执行失败' : '等待任务', state: hasFailedWorker ? 'failed' : hasRunningWorker ? 'active' : workers.length ? 'done' : 'idle' },
-    { icon: '✓', title: '结果返回', desc: hasAssistantText ? short(state.last_assistant_text || state.chat?.last_assistant_text, '', 42) : '生成并语音回复', state: hasAssistantText ? 'done' : 'idle' },
-  ];
-
-  els.workflowSteps.innerHTML = steps.map((step) => `
-    <div class="workflow-step ${step.state}">
-      <div class="step-icon">${step.icon}</div>
-      <div>
-        <div class="step-title">${escapeHtml(step.title)}</div>
-        <div class="step-desc">${escapeHtml(step.desc)}</div>
-      </div>
-    </div>
-  `).join('');
+  document.body.classList.toggle('is-chat-mode', state?.mode === 'chat');
+  document.body.classList.toggle('is-task-mode', state?.mode === 'task');
 }
 
 function renderSessions(state) {
@@ -520,7 +543,6 @@ function render(state, events) {
   renderTerminal(events);
   renderChat(state);
   renderAgents(state);
-  renderWorkflow(state);
   renderSessions(state);
 }
 

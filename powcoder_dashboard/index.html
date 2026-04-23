@@ -22,21 +22,23 @@
           <span id="connectionText" role="status" aria-live="polite">离线</span>
         </div>
         <div class="mode-toggle" role="tablist" aria-label="mode toggle">
-          <button id="autoModeBtn" class="mode-btn active" type="button" data-mode-view="auto">auto</button>
-          <button id="manualModeBtn" class="mode-btn" type="button" data-mode-view="manual">manual</button>
+          <button id="autoModeBtn" class="mode-btn active" type="button" data-mode-view="chat">闲聊</button>
+          <button id="manualModeBtn" class="mode-btn" type="button" data-mode-view="task">GPT 任务</button>
         </div>
       </div>
     </header>
 
     <main>
-      <section class="hero-section panel soft-panel">
-        <div class="hero-copy">
+      <section class="hero-strip panel soft-panel">
+        <div class="hero-strip-main">
           <div class="eyebrow">powcoder.space · <span id="updatedText">等待状态同步</span></div>
-          <h1>灵感，不用等。<br>终端，正在<strong>工作</strong>。</h1>
+          <h1>PowCoder 正在工作</h1>
           <p id="heroDesc" class="hero-desc">
             PowCoder 是一款面向 Web 4.0 时代的 AI Agent 终端。
             页面聚焦展示设备在线状态、语音对话、终端输出与 Agent 协作效果。
           </p>
+        </div>
+        <div class="hero-strip-side">
           <div class="tag-row" aria-label="runtime tags">
             <span id="modeTag" class="tag">mode: idle</span>
             <span id="providerTag" class="tag">provider: PowCoder</span>
@@ -47,8 +49,8 @@
             <button id="runSummaryBtn" class="ghost-btn" type="button">运行总结任务</button>
           </div>
         </div>
-        <div class="hero-device-wrap">
-          <img src="./assets/images/device-hero.png" alt="PowCoder 设备" class="hero-device">
+        <div class="hero-strip-product" aria-hidden="true">
+          <img src="./assets/images/device-hero.png" alt="PowCoder 设备" class="hero-device-compact">
         </div>
       </section>
 
@@ -56,7 +58,7 @@
         <div class="section-head three-col-head">
           <div>
             <h2>终端工作展示</h2>
-            <p>终端、Agent、语音对话和工作链路已接入本地 PowCoder visual service 状态。</p>
+            <p>终端、模式状态、语音对话和任务执行已接入本地 PowCoder visual service 状态。</p>
           </div>
           <div class="quick-actions">
             <button class="small-btn" id="clearLogBtn" type="button">清空终端</button>
@@ -64,7 +66,7 @@
           </div>
         </div>
 
-        <div class="grid-3">
+        <div class="grid-2">
           <section class="card terminal-card dark-card">
             <div class="card-header">
               <div>
@@ -108,38 +110,20 @@
               <button class="preset-btn" type="button" data-command="切换到 Visual Service 并生成可视化摘要">可视化摘要</button>
             </div>
           </section>
-
-          <section class="card agents-card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">当前 Agent</div>
-                <div class="card-sub">真实状态优先；未接入的角色保留原型交互</div>
-              </div>
-              <button id="focusActiveAgentBtn" class="link-btn" type="button">查看全部</button>
-            </div>
-            <div id="agentGrid" class="agent-grid"></div>
-          </section>
         </div>
 
-        <section class="workflow card workflow-card">
+        <section class="card agents-card mode-panel">
           <div class="card-header">
             <div>
-              <div class="card-title">工作链路</div>
-              <div class="card-sub">语音输入 → 本地服务 → dispatcher → Agent 执行 → 结果返回</div>
+              <div class="card-title">模式分区</div>
+              <div class="card-sub">JoyInside 单独承接闲聊模式；其余执行单元统一归入任务 Agent 模式</div>
             </div>
+            <button id="focusActiveAgentBtn" class="link-btn" type="button">查看全部</button>
           </div>
-          <div id="workflowSteps" class="workflow-steps"></div>
+          <div id="agentGrid" class="agent-grid"></div>
         </section>
-      </section>
 
-      <section class="resource-section panel soft-panel">
-        <div class="section-head">
-          <div>
-            <h2>Session 与状态数据</h2>
-            <p>左侧为最近对话与任务；右侧列出当前页面已经接入的本地接口。</p>
-          </div>
-        </div>
-        <div class="resource-grid">
+        <div class="resource-grid inline-resource-grid">
           <div id="sessionList" class="session-list"></div>
           <div class="resource-box">
             <ul>
