@@ -1,45 +1,18 @@
-# ── 第三方源码(克隆,不进仓库) ──────────────────────
-repo/
+# Firmware build artifacts
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig.old
 
-# ── 大模型文件(近 1GB) ──────────────────────────────
-models/**/*.pt
-models/**/*.onnx
-models/**/*.bin
-models/**/*.safetensors
+# Server runtime
+server/.venv/
+server/tmp/
+server/models/
+server/__pycache__/
+server/**/__pycache__/
+server/data/.config.yaml
+server/.env
 
-# ── 虚拟环境 ────────────────────────────────────────
-.venv/
-venv/
-**/.venv/
-**/venv/
-
-# ── 敏感配置(含 api_key) ────────────────────────────
-data/.config.yaml
-
-# ── 运行时产物 ──────────────────────────────────────
-*.log
-*.pid
-tmp/
-**/tmp/
-/tmp/xiaozhi-dispatcher-*
-
-# ── Python ──────────────────────────────────────────
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# ── macOS / IDE ─────────────────────────────────────
+# General
+*.pyc
 .DS_Store
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# ── 环境变量 ────────────────────────────────────────
-.env
-.env.local
-.env.*.local
+*.log

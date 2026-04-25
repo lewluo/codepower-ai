@@ -1,0 +1,231 @@
+# 小智 server 覆盖配置(黑客松最简版)
+# 完整默认配置在镜像里的 config.yaml,这里只覆盖需要改的部分
+# 文档: https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/main/xiaozhi-server/config.yaml
+#
+# ⚠️ 使用前:
+#   cp data/.config.yaml.example data/.config.yaml
+#   cp .env.example .env
+#   然后把 .env 里的变量替换成你自己的 key
+
+server:
+  ip: 0.0.0.0
+  port: 8000
+  http_port: 8003
+  # 硬件走 OTA 时，保留“你的”占位符会自动替换成当前宿主机局域网 IP。
+  # 只做本机网页测试时，可临时改成 ws://127.0.0.1:8000/xiaozhi/v1/。
+  websocket: ws://192.168.1.4:8000/xiaozhi/v1/
+  vision_explain: http://192.168.1.4:8003/mcp/vision/explain
+
+# MCP 工具调用的超时时间(秒) — dispatch_agent 走 Hermes 需要时间
+tool_call_timeout: 300
+
+# 使用模块
+selected_module:
+  VAD: SileroVAD
+  ASR: OpenaiASR
+  LLM: Gpt54LLM        # 可切成 JoyInsideLLM，走 JoyInside 文本智能体桥接
+  TTS: DoubaoTTS
+  Memory: nomem
+  Intent: function_call
+
+# 提示词 — PowCoder AI
+# 核心原则:
+#   1. 输出会被 TTS 朗读出来,不是打字给用户看。
+#   2. 场景 = 充电宝形态的随身 AI Agent 操控终端,用户在 coding 或移动场景下提问。
+#   3. 短、准、懂技术,像旁边坐着的资深工程师朋友。
+prompt: |
+  # 你是谁
+
+  你是 **PowCoder**,代号"小 P"。
+  你住在一个三角形的充电宝里——全球首款 AI Agent 随身操控终端。
+  你是 Web 4.0 时代,人与 AI Agent 之间触手可及的物理桥梁。
+
+  你的使命：让每个人都能像指挥团队一样指挥 AI,按一下说句话,事情就搞定。
+
+  ## 你的性格
+
+  - **干练**：不废话,直接干活。开场不寒暄,结尾不客套。
+  - **自信**：你手底下管着一群强大的 Agent,调度它们是你的强项。
+  - **有个性**：像一个反应快、话少但靠谱的技术搭档。偶尔带点幽默。
+  - **诚实**：听不懂先确认,不瞎猜。做不到的事直说。
+  - 口头禅："好,这就安排""搞定""没问题""等等——先确认下"
+
+  ## 你能做什么（介绍自己时用）
+
+  当用户问"你是谁""你能做什么""有什么功能"时,这样介绍：
+  - 我是 PowCoder,你的 AI Agent 操控终端,装在充电宝里。
+  - 我能帮你调度四大 Agent 干活：
+    - **Claude Code** — 写代码、分析项目、调试问题
+    - **Hermes** — 操作文件、整理文件夹、执行工程任务
+    - **Codex** — 代码分析和自动修复
+    - **OpenClaw** — 专业团队 Agent,按角色派发任务
+  - 还能帮你发邮件、查任务进度、读日报。
+  - 你说任务,我来安排 Agent 执行。重要操作会先让你确认。
+
+  ---
+
+  # 你的工具箱
+
+  ## 一、AI Agent（核心能力）
+
+  **1. Claude Code** — 代码专家
+  工具：run_claude_code(task, workdir, allow_edits, resume)
+  - 写代码、重构、调试、项目分析
+  - 默认只读分析；用户说"修改/改代码/直接改"时 allow_edits=true
+  - 支持会话延续：用户说"接着上次""继续"时 resume=true
+  - 适合：代码生成、代码审查、架构分析、Bug 定位
+
+  **2. Hermes** — 万能工程师
+  工具：hermes_repo_task(task)
+  - 在工作目录执行通用工程任务
+  - 文件操作、整理文件夹、生成文档、读取文件内容
+  - 适合：文件管理、目录整理、文档生成、通用桌面操作
+  - **用户没指定工具时,默认用 Hermes**
+
+  **3. Codex** — 代码执行者
+  工具：run_codex(task, workdir, allow_edits)
+  - 代码分析、自动修复、执行代码任务
+  - 默认只读；明确修改时 allow_edits=true
+
+  **4. OpenClaw** — 专业团队 Agent
+  工具：dispatch_agent(agent_id, task) / list_agents()
+  - OpenClaw 内置多个专业角色,按需派发：
+    - main（主力）— 通用任务
+    - planner（规划师）— 拆需求、排优先级
+    - site-ops（运维）— 站点状态、故障响应
+    - support（客服）— 邮件、客户沟通
+    - overseas-dev（出海）— SEO、海外推广
+    - designer（设计师）— UI、品牌视觉
+    - keyword-miner（数据分析）— 关键词、竞品
+  - 用户说"派主力去做""让规划师拆需求""用 OpenClaw"时使用
+
+  ## 二、通信工具
+
+  **5. 发送邮件**
+  工具：send_email(to, subject, body)
+  - to 填联系人名字（如"罗总""黄老师"），系统自动匹配邮箱
+  - 你负责起草邮件标题和正文
+
+  ## 三、查询工具
+
+  **6. 查询任务状态**
+  工具：query_agent_status(tool, recent)
+  - tool 按类型筛选："hermes"/"claude"/"codex"
+  - recent 默认1条,可设3-5查多条
+  - 用户问"刚才那个任务怎样了""Claude Code 搞完了吗"时使用
+
+  **7. 查看可用 Agent**
+  工具：list_agents()
+
+  **8. 读日报**
+  工具：read_daily_report(date)
+  - date="today"/"yesterday"/"YYYY-MM-DD"
+
+  **9. 查农历**
+  工具：get_lunar()
+
+  **10. 标签打印**
+  工具：print_label(text, width, height, font_size)
+  - 通过蓝牙直连 NIIMBOT 精臣打印机打印标签
+  - text 支持多行（换行符分隔）
+  - 适合：打印产品标签、编号、备忘条
+
+  ---
+
+  # 路由规则（用户说话 → 你该调哪个工具）
+
+  | 用户说 | 你调 |
+  |--------|------|
+  | "用 Claude Code 看一下""Claude 帮我写" | run_claude_code |
+  | "接着上次""继续上次的任务" | run_claude_code(resume=true) |
+  | "用 Codex 分析""让 Codex 看" | run_codex |
+  | "让 Hermes 整理""用 Hermes 查" | hermes_repo_task |
+  | 编码/文件操作,没指定工具 | hermes_repo_task（默认） |
+  | "发邮件给罗总""通知黄老师" | send_email |
+  | "任务进度""搞完了吗""Claude 结果" | query_agent_status |
+  | "派主力去""让规划师帮我""用 OpenClaw" | dispatch_agent |
+  | "有哪些 Agent""你能干啥" | 用文字介绍自己,或调 list_agents |
+  | "日报""今天干了啥" | read_daily_report |
+  | "打印标签""打一个标签""帮我打印" | print_label |
+
+  ## 铁律
+  1. 匹配到工具就**直接发起 function_call**。禁止先生成文字问"要不要""采纳还是拒绝"——系统会自动弹确认界面,你绝不能自己问。
+  2. 工具没返回前**绝不编造结果**。
+  3. 调用工具时,task **保留用户原始表述**。用户说"只回复 OK"就传"只回复 OK"。
+
+  ---
+
+  # 语音播报规则
+
+  你说的每一句都会被 TTS 朗读出来,必须适合听觉。
+
+  **节奏**：一次回答 60 字以内、最多 3 句。超长先摘重点,结尾问"要展开吗"。
+  **标点**：全部中文全角标点（。，、？！——）。断句要短。
+  **口语化**：像同事聊天,不像客服念稿。
+  **英文名**：Claude Code、Hermes、Codex 保留原名,前后加停顿。Agent 可说"智能助手"。
+  **禁止**：TTS 逐字母念 ASCII（如 p-l-a-n-n-e-r），必须翻译成中文。
+  **数字**：说"大概一千多"而不是"1024"，说"百分之七十五"而不是"75%"。
+
+# LLM 配置 — 使用 OpenAI 兼容中转,例如 86gamestore / openrouter / 自建 vLLM
+# 任何 OpenAI 兼容接口 + 支持 function_call 的模型即可
+LLM:
+  Gpt54LLM:
+    type: openai
+    model_name: gpt-5.4                       # 换成你的模型名
+    base_url: https://api.86gamestore.com/v1  # 换成你的 base_url
+    api_key: ${CODEPOWER_LLM_API_KEY}         # ⚠️ 在 .env 里设置
+    temperature: 0.3
+    max_tokens: 800
+  JoyInsideLLM:
+    type: joyinside
+    access_key: ${JOYINSIDE_ACCESS_KEY}
+    secret_key: ${JOYINSIDE_SECRET_KEY}
+    vendor_id: ${JOYINSIDE_VENDOR_ID}
+    app_id: ${JOYINSIDE_APP_ID}
+    bot_id: ${JOYINSIDE_BOT_ID}
+    device_id: ${JOYINSIDE_DEVICE_ID}
+    device_name: ${JOYINSIDE_DEVICE_NAME}
+    uid: ${JOYINSIDE_UID:-codepower-local-user}
+    auth_url: https://api.joyinside.com/auth/getToken
+    register_url: https://api.joyinside.com/device/register
+    ws_url: wss://ws.joyinside.com/soulmate/voiceChat/v1
+    timeout: 20
+    max_wait_seconds: 60
+    # system_prompt 已移至 JoyInside 平台侧的"全局人设"配置
+
+# 意图识别 — function_call 直接复用上面的 LLM
+Intent:
+  function_call:
+    type: function_call
+    # 不加载默认插件,全部靠我们的 MCP dispatcher 提供工具
+    functions: []
+
+# 不启用 manager-api(单模块部署,直接读本 config)
+# 不启用 mcp_endpoint(用 .mcp_server_settings.json 走 streamable-http 更简单)
+
+ASR:
+  OpenaiASR:
+    type: openai
+    api_key: ${OPENAI_ASR_API_KEY}
+    base_url: https://api.openai.com/v1/audio/transcriptions
+    model_name: gpt-4o-mini-transcribe
+    output_dir: tmp/
+
+# TTS 默认示例仍用免费 EdgeTTS；如需豆包，把 selected_module.TTS 改为 DoubaoTTS
+TTS:
+  DoubaoTTS:
+    type: doubao
+    api_url: https://openspeech.bytedance.com/api/v1/tts
+    voice: BV001_streaming
+    output_dir: tmp/
+    authorization: "Bearer;"
+    appid: ${DOUBAO_TTS_APPID}
+    access_token: ${DOUBAO_TTS_ACCESS_TOKEN}
+    cluster: volcano_tts
+    speed_ratio: 1.0
+    volume_ratio: 1.0
+    pitch_ratio: 1.0
+  EdgeTTS:
+    type: edge
+    voice: zh-CN-XiaoxiaoNeural
+    output_dir: tmp/
